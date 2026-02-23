@@ -1,0 +1,5 @@
+# roles/firewall/handlers/main.yml
+
+- name: Save iptables rules
+  command: netfilter-persistent save
+  become: true

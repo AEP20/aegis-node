@@ -5,3 +5,7 @@
     name: "wg-quick@{{ wg_interface }}"
     state: restarted
   become: true
+
+- name: Save iptables rules
+  command: netfilter-persistent save
+  become: true

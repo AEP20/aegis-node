@@ -1,0 +1,186 @@
+diff --git a/ansible/playbook-wireguard.yml b/ansible/playbook-wireguard.yml
+index 16473fb..082cfb3 100644
+--- a/ansible/playbook-wireguard.yml
++++ b/ansible/playbook-wireguard.yml
+@@ -75,6 +75,8 @@
+         chmod 644 {{ admin_public_key_path }}
+       args:
+         executable: /bin/bash
++        creates: "{{ admin_private_key_path }}"
++      changed_when: not admin_key_stat.stat.exists
+ 
+ 
+ - name: Bootstrap Admin Peer (register on VPS)
+@@ -158,6 +160,7 @@
+         peer {{ admin_public_key }}
+         allowed-ips {{ admin_peer_ip }}/32
+       when: peer_in_runtime.rc != 0
++      changed_when: true
+ 
+     - name: Persist admin peer to wg config
+       blockinfile:
+diff --git a/ansible/roles/firewall/handlers/main.yml b/ansible/roles/firewall/handlers/main.yml
+index e69de29..5979a7f 100644
+--- a/ansible/roles/firewall/handlers/main.yml
++++ b/ansible/roles/firewall/handlers/main.yml
+@@ -0,0 +1,5 @@
++# roles/firewall/handlers/main.yml
++
++- name: Save iptables rules
++  command: netfilter-persistent save
++  become: true
+diff --git a/ansible/roles/firewall/tasks/main.yml b/ansible/roles/firewall/tasks/main.yml
+index a044261..e2d8f3a 100644
+--- a/ansible/roles/firewall/tasks/main.yml
++++ b/ansible/roles/firewall/tasks/main.yml
+@@ -21,6 +21,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ # 2) Allow established/related traffic
+ - name: Allow established/related inbound
+@@ -31,6 +32,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ # 3) SSH brute-force mitigation + allow
+ #    We do this as:
+@@ -55,6 +57,7 @@
+     limit_burst: "{{ ssh_rate_limit_burst }}"
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Allow SSH (tcp/{{ ssh_port }})
+   iptables:
+@@ -64,6 +67,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ # 4) Allow WireGuard UDP
+ - name: Allow WireGuard (udp/{{ wg_port }})
+@@ -74,6 +78,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Allow all inbound from WireGuard interface
+   iptables:
+@@ -82,6 +87,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Allow DNS from VPN subnet (UDP)
+   iptables:
+@@ -92,6 +98,7 @@
+     jump: ACCEPT
+     state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Allow DNS from VPN subnet (TCP)
+   iptables:
+@@ -102,6 +109,7 @@
+     jump: ACCEPT
+     state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+   become: true
++  notify: Save iptables rules
+ 
+ # 5) Default policies (do this LAST, after allow rules)
+ - name: Set default INPUT policy to DROP
+@@ -109,19 +117,18 @@
+     chain: INPUT
+     policy: DROP
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Set default FORWARD policy to DROP (do not manage FORWARD rules here yet)
+   iptables:
+     chain: FORWARD
+     policy: DROP
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Set default OUTPUT policy to ACCEPT
+   iptables:
+     chain: OUTPUT
+     policy: ACCEPT
+   become: true
+-
+-- name: Save iptables rules
+-  command: netfilter-persistent save
+-  become: true
+\ No newline at end of file
++  notify: Save iptables rules
+diff --git a/ansible/roles/wireguard/handlers/main.yml b/ansible/roles/wireguard/handlers/main.yml
+index 9b136b2..d034847 100644
+--- a/ansible/roles/wireguard/handlers/main.yml
++++ b/ansible/roles/wireguard/handlers/main.yml
+@@ -5,3 +5,7 @@
+     name: "wg-quick@{{ wg_interface }}"
+     state: restarted
+   become: true
++
++- name: Save iptables rules
++  command: netfilter-persistent save
++  become: true
+diff --git a/ansible/roles/wireguard/tasks/main.yml b/ansible/roles/wireguard/tasks/main.yml
+index 4bef2b5..9a13537 100644
+--- a/ansible/roles/wireguard/tasks/main.yml
++++ b/ansible/roles/wireguard/tasks/main.yml
+@@ -51,6 +51,7 @@
+                -j MASQUERADE
+   become: true
+   changed_when: true
++  notify: Save iptables rules
+ 
+ - name: Allow established traffic back
+   iptables:
+@@ -60,6 +61,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Allow forwarding from WireGuard subnet
+   iptables:
+@@ -68,6 +70,7 @@
+     jump: ACCEPT
+     state: present
+   become: true
++  notify: Save iptables rules
+ 
+ - name: Check if server private key exists
+   stat:
+@@ -80,6 +83,7 @@
+   register: wg_private_key
+   when: not wg_private_key_stat.stat.exists
+   become: true
++  changed_when: false
+ 
+ - name: Save server private key
+   copy:
+@@ -93,6 +97,7 @@
+   shell: "wg pubkey < {{ wg_private_key_path }}"
+   register: wg_public_key
+   become: true
++  changed_when: false
+ 
+ - name: Read server private key
+   slurp:
+@@ -125,6 +130,3 @@
+     state: started
+   become: true
+ 
+-- name: Save iptables rules
+-  command: netfilter-persistent save
+-  become: true

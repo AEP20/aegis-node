@@ -21,6 +21,7 @@
     jump: ACCEPT
     state: present
   become: true
+  notify: Save iptables rules
 
 # 2) Allow established/related traffic
 - name: Allow established/related inbound
@@ -31,6 +32,7 @@
     jump: ACCEPT
     state: present
   become: true
+  notify: Save iptables rules
 
 # 3) SSH brute-force mitigation + allow
 #    We do this as:
@@ -55,6 +57,7 @@
     limit_burst: "{{ ssh_rate_limit_burst }}"
     state: present
   become: true
+  notify: Save iptables rules
 
 - name: Allow SSH (tcp/{{ ssh_port }})
   iptables:
@@ -64,6 +67,7 @@
     jump: ACCEPT
     state: present
   become: true
+  notify: Save iptables rules
 
 # 4) Allow WireGuard UDP
 - name: Allow WireGuard (udp/{{ wg_port }})
@@ -74,6 +78,7 @@
     jump: ACCEPT
     state: present
   become: true
+  notify: Save iptables rules
 
 - name: Allow all inbound from WireGuard interface
   iptables:
@@ -82,6 +87,7 @@
     jump: ACCEPT
     state: present
   become: true
+  notify: Save iptables rules
 
 - name: Allow DNS from VPN subnet (UDP)
   iptables:
@@ -92,6 +98,7 @@
     jump: ACCEPT
     state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
   become: true
+  notify: Save iptables rules
 
 - name: Allow DNS from VPN subnet (TCP)
   iptables:
@@ -102,6 +109,7 @@
     jump: ACCEPT
     state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
   become: true
+  notify: Save iptables rules
 
 # 5) Default policies (do this LAST, after allow rules)
 - name: Set default INPUT policy to DROP
@@ -109,19 +117,18 @@
     chain: INPUT
     policy: DROP
   become: true
+  notify: Save iptables rules
 
 - name: Set default FORWARD policy to DROP (do not manage FORWARD rules here yet)
   iptables:
     chain: FORWARD
     policy: DROP
   become: true
+  notify: Save iptables rules
 
 - name: Set default OUTPUT policy to ACCEPT
   iptables:
     chain: OUTPUT
     policy: ACCEPT
   become: true
-
-- name: Save iptables rules
-  command: netfilter-persistent save
-  become: true
+  notify: Save iptables rules
