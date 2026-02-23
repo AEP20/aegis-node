@@ -33,9 +33,6 @@ The playbook brings the security model.
 - **Monitors the node** in real time: CPU, memory, disk, uptime, WireGuard traffic per peer, and SSH event log with geo-IP enrichment.
 - **Bootstraps the admin peer** locally — private key never leaves your machine.
 
-![Dashboard - Peer Provisioning](docs/assets/dashboard-provision.png)
-*(One-click peer generation with automatic CIDR mapping and QR code rendering for mobile devices)*
-
 ## Architecture
 
 `aegis-node` runs as a single Ubuntu VPS acting as a hardened VPN gateway with strict separation between:
