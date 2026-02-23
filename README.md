@@ -140,15 +140,13 @@ The inventory file (`hosts.ini`) tells Ansible exactly where your server is and 
 # ansible/inventories/dev/hosts.ini
 
 [aegis]
-# Format: <alias> ansible_host=<ip> ansible_user=<user> ansible_port=<port>
-aegis-edge ansible_host=YOUR_VPS_IP ansible_user=root ansible_port=22
+aegis-edge ansible_host=[IP_ADDRESS] ansible_user=[INITIAL_USERNAME] ansible_shell_executable=/bin/bash
 ```
 
 **Connection Details:**
 - `ansible_host`: The public IP address of your newly provisioned VPS.
-- `ansible_user`: The user Ansible will use to connect. On a fresh VPS, this is typically `root` or a provider-specific user like `ubuntu` or `debian`.
-- `ansible_port`: The SSH listening port (default is `22`).
-- **Authentication:** By default, Ansible expects you to have SSH key-based authentication set up. Ensure you can successfully connect to the server via terminal (e.g., `ssh root@YOUR_VPS_IP`) before running the playbook. If you *must* use a password for the initial connection, you can append `ansible_ssh_pass="your_password"` to the line above, though key-based auth is strongly recommended.
+- `ansible_user`: The user Ansible will use to connect. On a fresh VPS, this is typically `root` or a provider-specific user like `ubuntu` or `debian`. However, adhering to the principle of least privilege, any initial user with `sudo` access is completely supported (e.g., a custom `aegis-shell` user).
+- **Authentication:** By default, Ansible expects you to have SSH key-based authentication set up. Ensure you can successfully connect to the server via terminal (e.g., `ssh YOUR_USER@YOUR_VPS_IP`) before running the playbook. If you *must* use a password for the initial connection, you can append `ansible_ssh_pass="your_password"` to the line above, though key-based auth is strongly recommended.
 
 ### 2. Review variables
 
