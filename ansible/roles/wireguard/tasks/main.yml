@@ -22,6 +22,15 @@
     reload: yes
   become: true
 
+- name: Allow services to bind to non-local IPs (prevents Unbound crash on VPN restart)
+  sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: "1"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
 - name: Show detected default interface
   debug:
     var: ansible_facts["default_ipv4"]["interface"]

@@ -49,6 +49,8 @@
     creates: "{{ dashboard_venv_dir }}/bin/activate"
   become: true
   become_user: "{{ aegis_system_user }}"
+  environment:
+    HOME: "{{ dashboard_app_dir }}"
 
 
 - name: Ensure venv ownership is correct
@@ -67,6 +69,8 @@
     virtualenv: "{{ dashboard_venv_dir }}"
   become: true
   become_user: "{{ aegis_system_user }}"
+  environment:
+    HOME: "{{ dashboard_app_dir }}"
 
 
 - name: Allow control-plane to run system commands without password
