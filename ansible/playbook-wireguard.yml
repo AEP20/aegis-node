@@ -1,0 +1,225 @@
+# ansible/playbook-wireguard.yml
+
+- name: Aegis Provision
+  hosts: aegis
+  become: true
+  pre_tasks:
+    - name: Ensure .secrets directory exists locally
+      file:
+        path: "{{ playbook_dir }}/.secrets"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Generate or read dashboard auth token locally
+      set_fact:
+        dashboard_auth_token: "{{ dashboard_auth_token | default(lookup('password', playbook_dir ~ '/.secrets/dashboard_token chars=ascii_letters,digits length=' ~ dashboard_auth_token_length)) }}"
+
+  roles:
+    - system
+    - wireguard
+    - dns
+    - firewall
+    - hardening
+    - dashboard
+
+
+# ──────────────────────────────────────────────────────────────────
+# Admin Peer Bootstrap (Optional)
+#
+# To activate, set in group_vars/all.yml:
+#   wg_bootstrap_admin: true
+#
+# Process:
+#   1. Generates wg keypair on the local machine (the playbook runner)
+#   2. Registers the public key to the VPS as a peer (runtime + persist)
+#   3. Writes peers/admin.conf locally (for WireGuard client import)
+#
+# Features:
+#   - Does NOT install any client software or modify host system config
+#   - The private key NEVER leaves the local machine
+#   - Idempotent: skips if the admin peer is already registered
+# ──────────────────────────────────────────────────────────────────
+
+- name: Bootstrap Admin Peer (local key generation)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    admin_key_dir: "{{ playbook_dir }}/../peers"
+    admin_private_key_path: "{{ admin_key_dir }}/admin_private.key"
+    admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
+
+  tasks:
+    - name: Skip if wg_bootstrap_admin is false
+      meta: end_play
+      when: not (wg_bootstrap_admin | default(false) | bool)
+
+    - name: Ensure peers/ directory exists locally
+      file:
+        path: "{{ admin_key_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Check if admin private key already exists
+      stat:
+        path: "{{ admin_private_key_path }}"
+      register: admin_key_stat
+
+    - name: Generate admin keypair (local)
+      when: not admin_key_stat.stat.exists
+      shell: |
+        wg genkey | tee {{ admin_private_key_path }} | wg pubkey > {{ admin_public_key_path }}
+        chmod 600 {{ admin_private_key_path }}
+        chmod 644 {{ admin_public_key_path }}
+      args:
+        executable: /bin/bash
+
+
+- name: Bootstrap Admin Peer (register on VPS)
+  hosts: aegis
+  become: true
+  gather_facts: false
+  vars:
+    admin_key_dir: "{{ playbook_dir }}/../peers"
+    admin_private_key_path: "{{ admin_key_dir }}/admin_private.key"
+    admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
+
+  tasks:
+    - name: Skip if wg_bootstrap_admin is false
+      meta: end_play
+      when: not (wg_bootstrap_admin | default(false) | bool)
+
+    - name: Read admin public key
+      slurp:
+        src: "{{ admin_public_key_path }}"
+      delegate_to: localhost
+      become: false
+      register: admin_pubkey_b64
+
+    - name: Set admin_public_key fact
+      set_fact:
+        admin_public_key: "{{ admin_pubkey_b64.content | b64decode | trim }}"
+
+    - name: Check if admin peer in runtime
+      shell: wg show {{ wg_interface }} peers | grep -qF "{{ admin_public_key }}"
+      register: peer_in_runtime
+      failed_when: false
+      changed_when: false
+
+    - name: Check if admin peer in wg config
+      command: grep -qF "{{ admin_public_key }}" {{ wg_config_path }}
+      register: peer_in_config
+      failed_when: false
+      changed_when: false
+      become: true
+
+    # --- Dynamic IP Allocation ---
+
+    - name: Read existing admin peer IP from config (if already added)
+      shell: >
+        grep -A5 "{{ admin_public_key }}" {{ wg_config_path }}
+        | grep -oP '(?<=AllowedIPs = )[\d.]+'
+        | head -1
+      register: existing_admin_ip
+      failed_when: false
+      changed_when: false
+      become: true
+
+    - name: Find next free WireGuard IP (if peer is new)
+      shell: |
+        BASE=$(echo "{{ wg_subnet_cidr }}" | cut -d. -f1-3).
+        for i in $(seq 2 254); do
+          IP="${BASE}${i}"
+          if ! grep -qF "AllowedIPs = ${IP}" {{ wg_config_path }} 2>/dev/null; then
+            echo "${IP}"
+            exit 0
+          fi
+        done
+        exit 1
+      register: next_free_ip
+      when: peer_in_config.rc != 0
+      become: true
+      changed_when: false
+
+    - name: Set admin_peer_ip (existing peer → read config, new peer → next free)
+      set_fact:
+        admin_peer_ip: >-
+          {%- if peer_in_config.rc == 0 -%}
+            {{ existing_admin_ip.stdout | trim }}
+          {%- else -%}
+            {{ next_free_ip.stdout | trim }}
+          {%- endif -%}
+
+    - name: Add admin peer to WireGuard (runtime)
+      command: >
+        wg set {{ wg_interface }}
+        peer {{ admin_public_key }}
+        allowed-ips {{ admin_peer_ip }}/32
+      when: peer_in_runtime.rc != 0
+
+    - name: Persist admin peer to wg config
+      blockinfile:
+        path: "{{ wg_config_path }}"
+        marker: "# {mark} ANSIBLE MANAGED — admin peer"
+        block: |
+          [Peer]
+          PublicKey = {{ admin_public_key }}
+          AllowedIPs = {{ admin_peer_ip }}/32
+      when: peer_in_config.rc != 0
+
+    - name: Read server public key
+      slurp:
+        src: "{{ dashboard_app_dir }}/server_public.key"
+      register: server_pubkey_b64
+
+    - name: Read admin private key (local)
+      slurp:
+        src: "{{ admin_private_key_path }}"
+      delegate_to: localhost
+      become: false
+      register: admin_privkey_b64
+
+    - name: Write admin WireGuard config locally
+      copy:
+        content: |
+          [Interface]
+          PrivateKey = {{ admin_privkey_b64.content | b64decode | trim }}
+          Address = {{ admin_peer_ip }}/32
+          DNS = {{ wg_server_ip }}
+
+          [Peer]
+          PublicKey = {{ server_pubkey_b64.content | b64decode | trim }}
+          Endpoint = {{ ansible_host }}:{{ wg_port }}
+          AllowedIPs = 0.0.0.0/0
+          PersistentKeepalive = 25
+        dest: "{{ admin_key_dir }}/admin.conf"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+
+    - name: Provisioning summary
+      delegate_to: localhost
+      become: false
+      debug:
+        msg:
+          - ""
+          - "══════════════════════════════════════════════════════════════"
+          - "                     AEGIS — Provision Complete               "
+          - "══════════════════════════════════════════════════════════════"
+          - ""
+          - "  VPN IP      : {{ admin_peer_ip }}/32"
+          - "  Endpoint    : {{ ansible_host }}:{{ wg_port }}"
+          - "  Config Path : peers/admin.conf"
+          - "  Dashboard   : http://{{ dashboard_bind_host }}:{{ dashboard_bind_port }}"
+          - "  Token Cmd   : cat .secrets/dashboard_token"
+          - ""
+          - "  macOS GUI:"
+          - "    File → Import Tunnel → peers/admin.conf"
+          - ""
+          - "  CLI:"
+          - "    sudo wg-quick up $(pwd)/../peers/admin.conf"
+          - ""
+          - "══════════════════════════════════════════════════════════════"
+          - ""

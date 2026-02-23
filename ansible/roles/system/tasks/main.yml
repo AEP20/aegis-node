@@ -1,0 +1,12 @@
+- name: Ensure aegis system group exists
+  group:
+    name: "{{ aegis_system_user }}"
+    system: yes
+
+- name: Ensure aegis system user exists
+  user:
+    name: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    system: yes
+    create_home: no
+    shell: /usr/sbin/nologin

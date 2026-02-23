@@ -1,0 +1,7 @@
+# roles/hardening/handlers/main.yml
+
+- name: Reload SSH
+  service:
+    name: ssh
+    state: reloaded
+  become: true

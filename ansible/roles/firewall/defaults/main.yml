@@ -1,0 +1,6 @@
+# roles/firewall/defaults/main.yml
+# Note: ssh_port and wg_port come from group_vars/all.yml.
+
+# Brute force noise reduction (iptables rate limit)
+ssh_rate_limit: "10/min"       # max 10 new connections per minute
+ssh_rate_limit_burst: 20       # burst before the limit is activated

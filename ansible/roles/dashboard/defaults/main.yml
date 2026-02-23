@@ -1,0 +1,3 @@
+# roles/dashboard/defaults/main.yml
+# Not: dashboard_app_dir, dashboard_venv_dir, dashboard_bind_host, dashboard_bind_port
+# group_vars/all.yml'dan gelir.

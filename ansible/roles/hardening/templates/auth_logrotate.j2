@@ -1,0 +1,15 @@
+# Managed by Ansible — Aegis Hardening
+# Aggressive rotation for auth.log (1 week, then destroy)
+
+/var/log/auth.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        systemctl reload rsyslog 2>/dev/null || true
+    endscript
+}

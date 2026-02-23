@@ -1,0 +1,16 @@
+# aegis-node/ansible/roles/dns/defaults/main.yml
+# Not: wg_server_ip ve wg_subnet_cidr group_vars/all.yml'dan gelir.
+
+dns_enable: true
+wg_dns_enforce: true
+
+dns_listen_address: "{{ wg_server_ip }}"   # CIDR'siz VPN IP (interface'e bind için)
+dns_listen_port: 53
+
+dns_allowed_subnet: "{{ wg_subnet_cidr }}"  # Yalnızca VPN alt ağından sorgu kabul et
+
+# Upstream DNS sunucuları. group_vars/all.yml'da dns_upstream_servers
+# tanımlanmışsa bu default değerin önüne geçer.
+dns_upstream_servers:
+  - "1.1.1.1"
+  - "1.0.0.1"

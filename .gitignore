@@ -1,0 +1,23 @@
+# Ansible
+*.retry
+
+# Secrets / keys
+**/*.key
+**/*.pem
+**/*_private
+secrets/
+.secrets/
+peers/
+.env
+
+# OS
+.DS_Store
+
+secrets/*
+
+dev-docs/*
+
+.github/ISSUE_TEMPLATE/*
+.github/PULL_REQUEST_TEMPLATE.md
+docs/*
+SECURITY.md

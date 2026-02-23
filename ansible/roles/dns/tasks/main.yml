@@ -1,0 +1,46 @@
+# aegis-node/ansible/roles/dns/tasks/main.yml
+
+- name: Install unbound DNS resolver
+  apt:
+    name: unbound
+    state: present
+    update_cache: yes
+  become: true
+  when: dns_enable
+
+- name: Deploy unbound configuration
+  template:
+    src: unbound.conf.j2
+    dest: /etc/unbound/unbound.conf
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: dns_enable
+  notify: Restart unbound
+
+- name: Redirect VPN DNS (UDP 53) to local unbound
+  iptables:
+    table: nat
+    chain: PREROUTING
+    in_interface: "{{ wg_interface }}"
+    protocol: udp
+    destination_port: 53
+    jump: DNAT
+    to_destination: "{{ wg_server_ip }}:53"
+    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+  become: true
+  when: dns_enable
+
+- name: Redirect VPN DNS (TCP 53) to local unbound
+  iptables:
+    table: nat
+    chain: PREROUTING
+    in_interface: "{{ wg_interface }}"
+    protocol: tcp
+    destination_port: 53
+    jump: DNAT
+    to_destination: "{{ wg_server_ip }}:53"
+    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+  become: true
+  when: dns_enable

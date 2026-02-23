@@ -1,0 +1,7 @@
+# aegis-node/control-plane/requirements.txt
+
+fastapi
+uvicorn[standard]
+qrcode[pil]
+python-multipart
+maxminddb

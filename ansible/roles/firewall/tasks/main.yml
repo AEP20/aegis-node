@@ -1,0 +1,127 @@
+# roles/firewall/tasks/main.yml
+
+- name: Ensure iptables is installed
+  apt:
+    name: iptables
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Ensure iptables persistence is installed
+  apt:
+    name: iptables-persistent
+    state: present
+  become: true
+
+# 1) Safety baseline: allow loopback
+- name: Allow loopback
+  iptables:
+    chain: INPUT
+    in_interface: lo
+    jump: ACCEPT
+    state: present
+  become: true
+
+# 2) Allow established/related traffic
+- name: Allow established/related inbound
+  iptables:
+    chain: INPUT
+    match: conntrack
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+    state: present
+  become: true
+
+# 3) SSH brute-force mitigation + allow
+#    We do this as:
+#    - Accept NEW SSH within a rate (limit match)
+#    - Accept SSH generally (so existing flows keep working)
+#
+#    Why two rules?
+#    - The first creates "soft throttling" for new connection attempts.
+#    - The second ensures normal SSH works; the first just reduces noise.
+#
+#    Note: This doesn't "ban"; it limits connection creation rate.
+
+- name: Rate-limit NEW SSH connections (soft throttle)
+  iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "{{ ssh_port }}"
+    match: conntrack
+    ctstate: NEW
+    jump: ACCEPT
+    limit: "{{ ssh_rate_limit }}"
+    limit_burst: "{{ ssh_rate_limit_burst }}"
+    state: present
+  become: true
+
+- name: Allow SSH (tcp/{{ ssh_port }})
+  iptables:
+    chain: INPUT
+    protocol: tcp
+    destination_port: "{{ ssh_port }}"
+    jump: ACCEPT
+    state: present
+  become: true
+
+# 4) Allow WireGuard UDP
+- name: Allow WireGuard (udp/{{ wg_port }})
+  iptables:
+    chain: INPUT
+    protocol: udp
+    destination_port: "{{ wg_port }}"
+    jump: ACCEPT
+    state: present
+  become: true
+
+- name: Allow all inbound from WireGuard interface
+  iptables:
+    chain: INPUT
+    in_interface: "{{ wg_interface }}"
+    jump: ACCEPT
+    state: present
+  become: true
+
+- name: Allow DNS from VPN subnet (UDP)
+  iptables:
+    chain: INPUT
+    in_interface: "{{ wg_interface }}"
+    protocol: udp
+    destination_port: 53
+    jump: ACCEPT
+    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+  become: true
+
+- name: Allow DNS from VPN subnet (TCP)
+  iptables:
+    chain: INPUT
+    in_interface: "{{ wg_interface }}"
+    protocol: tcp
+    destination_port: 53
+    jump: ACCEPT
+    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+  become: true
+
+# 5) Default policies (do this LAST, after allow rules)
+- name: Set default INPUT policy to DROP
+  iptables:
+    chain: INPUT
+    policy: DROP
+  become: true
+
+- name: Set default FORWARD policy to DROP (do not manage FORWARD rules here yet)
+  iptables:
+    chain: FORWARD
+    policy: DROP
+  become: true
+
+- name: Set default OUTPUT policy to ACCEPT
+  iptables:
+    chain: OUTPUT
+    policy: ACCEPT
+  become: true
+
+- name: Save iptables rules
+  command: netfilter-persistent save
+  become: true

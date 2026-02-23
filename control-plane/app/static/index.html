@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aegis — Control Plane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- Login overlay -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <span class="logo-mark">▲</span>
+        <span class="logo-text">aegis</span>
+      </div>
+      <p class="login-sub">control plane</p>
+      <form id="login-form" autocomplete="off">
+        <div class="field">
+          <label for="token-input">auth token</label>
+          <input id="token-input" type="password" placeholder="x-aegis-token" spellcheck="false" />
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">connect</button>
+        <p id="login-error" class="login-error hidden">invalid token</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="app hidden">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <span class="logo-mark">▲</span>
+        <span class="logo-text">aegis</span>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-tab="overview">
+          <span class="nav-icon">◈</span> overview
+        </button>
+        <button class="nav-item" data-tab="peers">
+          <span class="nav-icon">◉</span> peers
+        </button>
+        <button class="nav-item" data-tab="provision">
+          <span class="nav-icon">⊕</span> provision
+        </button>
+        <button class="nav-item" data-tab="monitor">
+          <span class="nav-icon">◎</span> monitor
+        </button>
+        <button class="nav-item" data-tab="performance">
+          <span class="nav-icon">◬</span> performance
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-dot-wrap">
+          <span id="vpn-dot" class="status-dot dot-unknown"></span>
+          <span id="vpn-label" class="status-label">checking…</span>
+        </div>
+        <button id="logout-btn" class="btn-ghost">logout</button>
+      </div>
+    </aside>
+
+    <!-- Content -->
+    <main class="content">
+
+      <!-- Overview tab -->
+      <section id="tab-overview" class="tab active">
+        <header class="page-header">
+          <h1>Overview</h1>
+          <button id="refresh-btn" class="btn btn-secondary">↻ refresh</button>
+        </header>
+
+        <div class="cards-row">
+          <div class="card stat-card">
+            <p class="stat-label">vpn status</p>
+            <p id="stat-vpn" class="stat-value">—</p>
+          </div>
+          <div class="card stat-card">
+            <p class="stat-label">total peers</p>
+            <p id="stat-total" class="stat-value">—</p>
+          </div>
+          <div class="card stat-card">
+            <p class="stat-label">active peers</p>
+            <p id="stat-active" class="stat-value">—</p>
+          </div>
+          <div class="card stat-card">
+            <p class="stat-label">last check</p>
+            <p id="stat-time" class="stat-value">—</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="card-title">system</p>
+          <div class="info-grid">
+            <span class="info-key">endpoint</span>
+            <span id="info-endpoint" class="info-val mono">—</span>
+            <span class="info-key">subnet</span>
+            <span id="info-subnet" class="info-val mono">—</span>
+            <span class="info-key">interface</span>
+            <span class="info-val mono">wg0</span>
+            <span class="info-key">api</span>
+            <span class="info-val mono">aegis-api.service</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Peers tab -->
+      <section id="tab-peers" class="tab hidden">
+        <header class="page-header">
+          <h1>Peers</h1>
+          <button id="peers-refresh-btn" class="btn btn-secondary">↻ refresh</button>
+        </header>
+
+        <div class="card">
+          <div id="peers-list" class="peers-list">
+            <p class="empty-state">loading…</p>
+          </div>
+        </div>
+
+        <!-- Add peer manually -->
+        <div class="card">
+          <p class="card-title">add peer manually</p>
+          <form id="add-peer-form" class="inline-form">
+            <input id="peer-pubkey" type="text" placeholder="peer public key (base64)" class="input-mono" />
+            <input id="peer-ip" type="text" placeholder="allowed ip  e.g. 10.66.66.10/32" class="input-mono" />
+            <button type="submit" class="btn btn-primary">add</button>
+          </form>
+          <p id="add-peer-msg" class="form-msg hidden"></p>
+        </div>
+      </section>
+
+      <!-- Provision tab -->
+      <section id="tab-provision" class="tab hidden">
+        <header class="page-header">
+          <h1>Provision Peer</h1>
+        </header>
+
+        <div class="card provision-card">
+          <p class="provision-desc">
+            Generates a fresh WireGuard keypair, allocates the next available IP,
+            adds the peer to the live interface and config, then returns the client
+            config and a scan-ready QR code.
+          </p>
+          <button id="provision-btn" class="btn btn-primary">generate &amp; provision</button>
+        </div>
+
+        <div id="provision-result" class="provision-result hidden">
+          <div class="card qr-card">
+            <p class="card-title">
+              qr code
+              <span class="info-icon" data-tooltip="Scan with WireGuard mobile app to instantly add this peer">?</span>
+            </p>
+            <img id="qr-img" src="" alt="WireGuard QR code" class="qr-image" />
+          </div>
+
+          <div class="card">
+            <p class="card-title">
+              client config
+              <span class="info-icon" data-tooltip="Download and import into WireGuard desktop apps (macOS, Windows, etc.)">?</span>
+            </p>
+            <div class="config-header">
+              <span id="peer-ip-label" class="mono tag"></span>
+              <div class="config-actions">
+                <button id="copy-btn" class="btn-ghost btn-small">copy config</button>
+                <button id="download-btn" class="btn btn-secondary btn-small">↓ download .conf</button>
+              </div>
+            </div>
+            <pre id="config-pre" class="config-block"></pre>
+          </div>
+
+          <div class="card">
+            <p class="card-title">
+              linux unattended install
+              <span class="info-icon" data-tooltip="Copy and paste this command into a new server's terminal (e.g. Ubuntu/Debian) to automatically install and configure WireGuard">?</span>
+            </p>
+            <div class="config-header" style="margin-bottom: 8px;">
+              <span class="mono tag" style="background: rgba(61,220,132,.1); color: var(--green);">magic script</span>
+              <button id="copy-script-btn" class="btn btn-secondary btn-small">copy command</button>
+            </div>
+            <pre id="script-pre" class="config-block"></pre>
+          </div>
+
+          <div class="card">
+            <p class="card-title">public key</p>
+            <p id="provision-pk" class="mono tag"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Monitor tab -->
+      <section id="tab-monitor" class="tab hidden">
+        <header class="page-header">
+          <h1>Monitor</h1>
+          <button id="monitor-refresh-btn" class="btn btn-secondary">↻ refresh</button>
+        </header>
+
+        <!-- Reboot required banner -->
+        <div id="reboot-banner" class="reboot-banner hidden">
+          <span class="reboot-icon">⚠</span>
+          <span>A kernel security update has been applied —
+            <strong>reboot required</strong> to activate.
+            The server continues running safely until you schedule a reboot.
+          </span>
+          <div class="reboot-actions">
+            <button id="reboot-schedule-btn" class="btn btn-warning btn-small">
+              ⏻ reboot in 5 min
+            </button>
+            <button id="reboot-cancel-btn" class="btn btn-ghost btn-small hidden">
+              ✕ cancel
+            </button>
+          </div>
+        </div>
+
+        <!-- System stats -->
+        <div class="cards-row">
+          <div class="card stat-card">
+            <p class="stat-label">cpu</p>
+            <p id="mon-cpu-val" class="stat-value">—</p>
+            <div class="gauge-bar"><div id="mon-cpu-bar" class="gauge-fill cpu-fill"></div></div>
+          </div>
+          <div class="card stat-card">
+            <p class="stat-label">memory</p>
+            <p id="mon-mem-val" class="stat-value">—</p>
+            <div class="gauge-bar"><div id="mon-mem-bar" class="gauge-fill mem-fill"></div></div>
+          </div>
+          <div class="card stat-card">
+            <p class="stat-label">disk</p>
+            <p id="mon-disk-val" class="stat-value">—</p>
+            <div class="gauge-bar"><div id="mon-disk-bar" class="gauge-fill disk-fill"></div></div>
+          </div>
+          <div class="card stat-card">
+            <p class="stat-label">uptime</p>
+            <p id="mon-uptime" class="stat-value uptime-val">—</p>
+          </div>
+        </div>
+
+        <!-- Services + Traffic row -->
+        <div class="monitor-row">
+          <div class="card">
+            <p class="card-title">services</p>
+            <div id="mon-services" class="services-list"></div>
+          </div>
+
+          <div class="card">
+            <p class="card-title">vpn traffic</p>
+            <div id="mon-traffic" class="traffic-table-wrap">
+              <p class="empty-state">loading…</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- SSH Login Timeline -->
+        <div class="card">
+          <p class="card-title">ssh login timeline — last 7 days</p>
+          <div id="mon-timeline" class="ssh-timeline"></div>
+        </div>
+
+        <!-- SSH Activity -->
+        <div class="card">
+          <p class="card-title">ssh activity</p>
+          <div id="mon-ssh" class="ssh-log">
+            <p class="empty-state">loading…</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Performance tab -->
+      <section id="tab-performance" class="tab hidden">
+        <header class="page-header">
+          <h1>Performance</h1>
+          <button id="perf-refresh-btn" class="btn btn-secondary">↻ refresh</button>
+        </header>
+
+        <div class="cards-row">
+          <div class="card stat-card perf-card">
+            <p class="stat-label">Active Users</p>
+            <p id="perf-users-val" class="stat-value">—</p>
+            <p id="perf-users-sub" class="stat-sub">out of total</p>
+          </div>
+          <div class="card stat-card perf-card">
+            <p class="stat-label">System Load</p>
+            <p id="perf-load-val" class="stat-value">—</p>
+            <p id="perf-load-sub" class="stat-sub">1m / 5m / 15m</p>
+          </div>
+          <div class="card stat-card perf-card">
+            <p class="stat-label">Uplink Latency</p>
+            <p id="perf-ping-val" class="stat-value">—</p>
+            <p class="stat-sub">to 1.1.1.1</p>
+          </div>
+          <div class="card stat-card perf-card">
+            <p class="stat-label">Network Drops</p>
+            <p id="perf-drops-val" class="stat-value">—</p>
+            <p class="stat-sub">healthy if 0</p>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+          <p class="card-title">Live VPN Bandwidth</p>
+          <div class="throughput-monitor">
+            <div class="tp-box" style="border-left: 2px solid var(--accent)">
+              <span class="tp-label">↓ Download (RX)</span>
+              <span id="perf-rx-speed" class="tp-speed mono">—</span>
+            </div>
+            <div class="tp-box" style="border-left: 2px solid var(--green)">
+              <span class="tp-label">↑ Upload (TX)</span>
+              <span id="perf-tx-speed" class="tp-speed mono">—</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

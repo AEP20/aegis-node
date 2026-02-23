@@ -1,0 +1,7 @@
+# aegis-node/ansible/roles/hardening/templates/ssh_hardening.conf.j2
+# Managed by Ansible - Aegis Hardening
+
+Port {{ ssh_port }}
+PermitRootLogin {{ ssh_permit_root_login }}
+PasswordAuthentication {{ ssh_password_auth }}
+PubkeyAuthentication {{ ssh_pubkey_auth }}

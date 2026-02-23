@@ -1,0 +1,178 @@
+# roles/hardening/tasks/main.yml
+
+- name: Ensure logrotate is installed
+  apt:
+    name: logrotate
+    state: present
+  become: true
+
+- name: Deploy auth.log rotation config (daily, 7 days)
+  template:
+    src: auth_logrotate.j2
+    dest: /etc/logrotate.d/aegis-auth
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+# ── Automatic security updates ───────────────────────────────
+
+- name: Install unattended-upgrades and needrestart
+  apt:
+    name:
+      - unattended-upgrades
+      - needrestart
+    state: present
+    update_cache: true
+  become: true
+
+- name: Deploy unattended-upgrades config (security only, no auto-reboot)
+  template:
+    src: 50unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Enable APT periodic upgrade schedule
+  template:
+    src: 20auto-upgrades.j2
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Enable and start unattended-upgrades service
+  systemd:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  become: true
+
+- name: Ensure OpenSSH server is installed
+  apt:
+    name: openssh-server
+    state: present
+  become: true
+
+- name: Ensure sshd_config.d directory exists
+  file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Deploy SSH hardening config (validated)
+  template:
+    src: ssh_hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/aegis-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: '/usr/sbin/sshd -t -f %s'
+  become: true
+  notify: Reload SSH
+
+# --- IPv6 Strategy (Split-3) ---
+
+- name: Disable IPv6 (runtime)
+  sysctl:
+    name: net.ipv6.conf.all.disable_ipv6
+    value: "{{ '0' if wg_enable_ipv6 else '1' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Disable IPv6 default interface
+  sysctl:
+    name: net.ipv6.conf.default.disable_ipv6
+    value: "{{ '0' if wg_enable_ipv6 else '1' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+# --- Reverse Path Filtering (Split-6) ---
+
+- name: Configure rp_filter (all)
+  sysctl:
+    name: net.ipv4.conf.all.rp_filter
+    value: "{{ wg_rp_filter_mode if wg_enable_rp_filter else '0' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Configure rp_filter (default)
+  sysctl:
+    name: net.ipv4.conf.default.rp_filter
+    value: "{{ wg_rp_filter_mode if wg_enable_rp_filter else '0' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+# --- Redirect Hardening ---
+
+- name: Disable IPv4 accept_redirects (all)
+  sysctl:
+    name: net.ipv4.conf.all.accept_redirects
+    value: "{{ '0' if wg_disable_redirects else '1' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Disable IPv4 accept_redirects (default)
+  sysctl:
+    name: net.ipv4.conf.default.accept_redirects
+    value: "{{ '0' if wg_disable_redirects else '1' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Disable IPv4 send_redirects (all)
+  sysctl:
+    name: net.ipv4.conf.all.send_redirects
+    value: "{{ '0' if wg_disable_redirects else '1' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Disable IPv4 send_redirects (default)
+  sysctl:
+    name: net.ipv4.conf.default.send_redirects
+    value: "{{ '0' if wg_disable_redirects else '1' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+# --- Martian Logging ---
+
+- name: Enable martian packet logging
+  sysctl:
+    name: net.ipv4.conf.all.log_martians
+    value: "{{ '1' if wg_log_martians else '0' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+# --- TCP SYN Cookies ---
+
+- name: Enable TCP syncookies
+  sysctl:
+    name: net.ipv4.tcp_syncookies
+    value: "{{ '1' if wg_enable_syncookies else '0' }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true

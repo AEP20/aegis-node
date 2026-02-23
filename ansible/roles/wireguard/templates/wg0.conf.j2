@@ -1,0 +1,8 @@
+# ansible/roles/wireguard/templates/wg0.conf.j2
+
+[Interface]
+Address = {{ wg_server_address }}
+ListenPort = {{ wg_port }}
+PrivateKey = {{ wg_private_key_file.content | b64decode }}
+
+# NAT handled via iptables task

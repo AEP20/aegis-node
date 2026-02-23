@@ -1,0 +1,7 @@
+# roles/wireguard/handlers/main.yml
+
+- name: Restart WireGuard
+  systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    state: restarted
+  become: true

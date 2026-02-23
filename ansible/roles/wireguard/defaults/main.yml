@@ -1,0 +1,8 @@
+# roles/wireguard/defaults/main.yml
+# Note: wg_subnet_cidr, wg_server_address, wg_port, wg_config_path
+# come from group_vars/all.yml.
+
+wg_full_tunnel: true          # client AllowedIPs = 0.0.0.0/0 (Full tunnel target)
+
+wg_private_key_path: "/etc/wireguard/server_private.key"
+wg_public_key_path: "/etc/wireguard/server_public.key"

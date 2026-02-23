@@ -1,0 +1,190 @@
+---
+# =============================================================================
+# aegis-node — Global Configuration
+# =============================================================================
+#
+# This file is the single source of truth for all Ansible roles.
+# Every role reads its configuration from here unless explicitly overridden.
+#
+# Variable precedence:
+#   role defaults < group_vars/all.yml < host_vars < extra-vars (CLI)
+#
+# Production note:
+#   Sensitive values (tokens, secrets) should be encrypted using ansible-vault:
+#     ansible-vault encrypt_string 'value' --name 'variable_name'
+#
+# Role-specific static defaults live under:
+#   roles/<role_name>/defaults/main.yml
+# =============================================================================
+
+
+
+# =============================================================================
+# WireGuard
+# =============================================================================
+# Defines the VPN interface, addressing model, and core tunnel behavior.
+# These values directly influence routing, firewall rules, and wg0.conf.
+# =============================================================================
+
+# Complete VPN subnet (used for routing + firewall source rules)
+wg_subnet_cidr: "10.66.66.0/24"
+
+# Server IP inside the VPN (without CIDR)
+# Also used as the DNS resolver address if DNS is enabled
+wg_server_ip: "10.66.66.1"
+
+# Full interface address (used in wg0.conf [Interface] Address field)
+wg_server_address: "10.66.66.1/24"
+
+# UDP port WireGuard listens on (firewall opens this port)
+wg_port: 51820
+
+# WireGuard interface name (creates /etc/wireguard/<wg_interface>.conf)
+wg_interface: "wg0"
+
+# Absolute path to the WireGuard configuration file
+wg_config_path: "/etc/wireguard/{{ wg_interface }}.conf"
+
+# IPv6 support toggle
+# false = disables IPv6 across sysctl + firewall
+wg_enable_ipv6: false
+
+
+
+# =============================================================================
+# DNS — Resolver Configuration
+# =============================================================================
+# Controls deployment and enforcement of the Unbound DNS resolver.
+# =============================================================================
+
+# Install and configure Unbound resolver
+dns_enable: true
+
+# Enforce wg_server_ip as DNS in generated client configs
+# false = client may use its own DNS (risk of DNS leak)
+wg_dns_enforce: true
+
+# Upstream DNS servers for Unbound forwarding
+dns_upstream_servers:
+  - "1.1.1.1"  # Cloudflare
+  - "1.0.0.1"
+
+
+
+# =============================================================================
+# SSH — Access Hardening
+# =============================================================================
+# Governs SSH exposure and authentication policy.
+# =============================================================================
+
+# SSH listening port (update inventory if changed)
+ssh_port: 22
+
+# Root login policy:
+#   "no"                → completely disabled
+#   "prohibit-password" → key-only root login
+ssh_permit_root_login: "no"
+
+# Password authentication policy:
+#   "no"  → key-only (recommended for production)
+#   "yes" → temporary convenience during initial bootstrap
+ssh_password_auth: "yes"
+
+# Public key authentication (should always remain enabled)
+ssh_pubkey_auth: "yes"
+
+
+
+# =============================================================================
+# Network Hardening — Kernel & Routing Controls
+# =============================================================================
+# sysctl-level protections against spoofing, misrouting and SYN floods.
+# =============================================================================
+
+# Reverse Path Filtering (anti-spoofing)
+# Mode:
+#   1 → strict
+#   2 → loose (recommended for WireGuard environments)
+wg_enable_rp_filter: true
+wg_rp_filter_mode: 2
+
+# Disable ICMP redirects (prevents route manipulation)
+wg_disable_redirects: true
+
+# Log "martian" packets (invalid or suspicious source addresses)
+wg_log_martians: true
+
+# Enable TCP SYN cookies (SYN flood mitigation)
+wg_enable_syncookies: true
+
+
+
+# =============================================================================
+# Aegis Control Plane — API & Dashboard
+# =============================================================================
+# Defines deployment paths, binding model, authentication and monitoring.
+# The control plane is designed to bind exclusively to the VPN interface.
+# =============================================================================
+
+# Root directory for application deployment
+dashboard_app_dir: "/opt/aegis"
+
+# Python virtual environment path
+dashboard_venv_dir: "/opt/aegis/venv"
+
+# Dedicated system user (non-root execution)
+aegis_system_user: aegis
+
+# Bind address for the API
+# Default: wg_server_ip (private VPN-only exposure)
+# WARNING: Setting to 0.0.0.0 exposes API publicly
+dashboard_bind_host: "{{ wg_server_ip }}"
+
+# API listening port
+dashboard_bind_port: "8000"
+
+# Token-based authentication toggle
+dashboard_enable_auth: true
+
+# Optional externally supplied auth token
+# If undefined, playbook auto-generates and stores in:
+#   ansible/.secrets/dashboard_token
+# dashboard_auth_token: ""
+
+# Auto-generated token length
+dashboard_auth_token_length: 10
+
+# Peer metadata storage (labels + timestamps)
+dashboard_labels_path: "{{ dashboard_app_dir }}/peer_labels.json"
+
+# GeoIP enrichment database
+dashboard_geo_db_url: "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
+dashboard_geo_db_path: "{{ dashboard_app_dir }}/GeoLite2-City.mmdb"
+
+# Peer activity classification threshold (seconds since last handshake)
+wg_handshake_threshold: 120
+
+# Allow delayed reboot scheduling from control plane
+# false removes shutdown privilege from sudoers
+dashboard_allow_reboot: true
+
+
+
+# =============================================================================
+# Admin Peer Bootstrap
+# =============================================================================
+# Automatically provisions the machine running the playbook as a VPN peer.
+#
+# Process:
+#   1. Generates WireGuard keypair locally (private key never leaves host)
+#   2. Registers public key as server peer
+#   3. Dynamically assigns available IP from wg_subnet_cidr
+#   4. Writes peers/admin.conf locally for import
+#
+# Idempotent: safe to re-run without duplicating peers.
+# =============================================================================
+
+wg_bootstrap_admin: true
+# NOTE:
+# admin_peer_ip is intentionally not defined.
+# IP allocation is dynamically calculated from existing wg0.conf.

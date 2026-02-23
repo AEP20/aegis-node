@@ -1,0 +1,26 @@
+# aegis-node/ansible/roles/dns/templates/unbound.conf.j2'
+
+server:
+    interface: {{ dns_listen_address }}
+    port: {{ dns_listen_port }}
+
+    access-control: {{ dns_allowed_subnet }} allow
+
+    verbosity: 0
+    hide-identity: yes
+    hide-version: yes
+
+    qname-minimisation: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+
+    cache-min-ttl: 3600
+    cache-max-ttl: 86400
+
+    prefetch: yes
+
+forward-zone:
+    name: "."
+{% for addr in dns_upstream_servers %}
+    forward-addr: {{ addr }}
+{% endfor %}

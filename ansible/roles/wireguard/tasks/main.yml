@@ -1,0 +1,130 @@
+# roles/wireguard/tasks/main.yml
+
+- name: Ensure WireGuard is installed
+  apt:
+    name: wireguard
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Install iptables persistence
+  apt:
+    name: iptables-persistent
+    state: present
+  become: true
+
+- name: Enable IPv4 forwarding (runtime)
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Show detected default interface
+  debug:
+    var: ansible_facts["default_ipv4"]["interface"]
+
+- name: Ensure iptables is installed
+  apt:
+    name: iptables
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Ensure exactly one MASQUERADE rule (remove all, re-add once)
+  shell:
+    cmd: |
+      IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
+      SOURCE="{{ wg_subnet_cidr }}"
+      # Delete all matching rules (commented or not)
+      while iptables -t nat -C POSTROUTING \
+            -s "$SOURCE" -o "$IFACE" -j MASQUERADE 2>/dev/null; do
+        iptables -t nat -D POSTROUTING \
+                 -s "$SOURCE" -o "$IFACE" -j MASQUERADE
+      done
+      # Add a single clean rule
+      iptables -t nat -A POSTROUTING \
+               -s "$SOURCE" -o "$IFACE" \
+               -m comment --comment "WireGuard NAT" \
+               -j MASQUERADE
+  become: true
+  changed_when: true
+
+- name: Allow established traffic back
+  iptables:
+    chain: FORWARD
+    match: state
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+    state: present
+  become: true
+
+- name: Allow forwarding from WireGuard subnet
+  iptables:
+    chain: FORWARD
+    source: "{{ wg_subnet_cidr }}"
+    jump: ACCEPT
+    state: present
+  become: true
+
+- name: Check if server private key exists
+  stat:
+    path: "{{ wg_private_key_path }}"
+  register: wg_private_key_stat
+  become: true
+
+- name: Generate server private key
+  command: wg genkey
+  register: wg_private_key
+  when: not wg_private_key_stat.stat.exists
+  become: true
+
+- name: Save server private key
+  copy:
+    content: "{{ wg_private_key.stdout }}"
+    dest: "{{ wg_private_key_path }}"
+    mode: "0600"
+  when: not wg_private_key_stat.stat.exists
+  become: true
+
+- name: Generate server public key
+  shell: "wg pubkey < {{ wg_private_key_path }}"
+  register: wg_public_key
+  become: true
+
+- name: Read server private key
+  slurp:
+    src: "{{ wg_private_key_path }}"
+  register: wg_private_key_file
+  become: true
+
+- name: Save server public key
+  copy:
+    content: "{{ wg_public_key.stdout }}"
+    dest: "{{ wg_public_key_path }}"
+    mode: "0644"
+  become: true
+
+- name: Create wg0 configuration file
+  template:
+    src: wg0.conf.j2
+    dest: "{{ wg_config_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  become: true
+  notify: Restart WireGuard
+
+- name: Enable and start WireGuard interface
+  systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    enabled: true
+    state: started
+  become: true
+
+- name: Save iptables rules
+  command: netfilter-persistent save
+  become: true

@@ -1,0 +1,110 @@
+# roles/dashboard/tasks/main.yml
+
+- name: Install Python base packages
+  apt:
+    name:
+      - python3
+      - python3-venv
+      - python3-pip
+      - acl   
+    state: present
+    update_cache: yes
+  become: true
+
+
+- name: Ensure /opt/aegis exists and owned by aegis
+  file:
+    path: "{{ dashboard_app_dir }}"
+    state: directory
+    owner: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    mode: "0755"
+    recurse: yes
+  become: true
+
+
+- name: Copy control-plane code
+  copy:
+    src: "{{ playbook_dir }}/../control-plane/"
+    dest: "{{ dashboard_app_dir }}/"
+    owner: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    mode: "0755"
+  become: true
+
+
+- name: Download GeoLite2 City DB for offline IP Geolocation
+  get_url:
+    url: "{{ dashboard_geo_db_url }}"
+    dest: "{{ dashboard_geo_db_path }}"
+    owner: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    mode: "0644"
+  become: true
+
+
+- name: Create Python virtual environment (as aegis)
+  command: python3 -m venv {{ dashboard_venv_dir }}
+  args:
+    creates: "{{ dashboard_venv_dir }}/bin/activate"
+  become: true
+  become_user: "{{ aegis_system_user }}"
+
+
+- name: Ensure venv ownership is correct
+  file:
+    path: "{{ dashboard_venv_dir }}"
+    state: directory
+    owner: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    recurse: yes
+  become: true
+
+
+- name: Install Python requirements (as aegis)
+  pip:
+    requirements: "{{ dashboard_app_dir }}/requirements.txt"
+    virtualenv: "{{ dashboard_venv_dir }}"
+  become: true
+  become_user: "{{ aegis_system_user }}"
+
+
+- name: Allow control-plane to run system commands without password
+  copy:
+    dest: /etc/sudoers.d/aegis-wg
+    content: |
+      {{ aegis_system_user }} ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/tee, /usr/bin/tail, /bin/cat{% if dashboard_allow_reboot %}, /usr/sbin/shutdown{% endif %}
+
+    owner: root
+    group: root
+    mode: "0440"
+    validate: '/usr/sbin/visudo -cf %s'
+  become: true
+
+- name: Copy server public key to app directory (aegis-readable)
+  copy:
+    src: "{{ wg_public_key_path }}"
+    dest: "{{ dashboard_app_dir }}/server_public.key"
+    owner: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    mode: "0644"
+    remote_src: yes
+  become: true
+
+- name: Deploy systemd service
+  template:
+    src: aegis-api.service.j2
+    dest: /etc/systemd/system/aegis-api.service
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Reload systemd
+
+
+- name: Enable and start aegis-api
+  systemd:
+    name: aegis-api
+    enabled: true
+    state: restarted
+  become: true
