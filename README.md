@@ -14,6 +14,8 @@ Designed as an **Infrastructure Security & Network Engineering** project: opinio
 
 ---
 
+![Dashboard - Monitoring-Page](https://github.com/user-attachments/assets/caed3ac2-c3a6-4459-a808-2a01656d3bdb)
+
 ## What this project is
 
 `aegis-node` is not a hosted VPN service.
@@ -30,6 +32,9 @@ The playbook brings the security model.
 - **Manages WireGuard peers** via API: add, remove, or provision new peers with auto-assigned IPs and QR-code config generation.
 - **Monitors the node** in real time: CPU, memory, disk, uptime, WireGuard traffic per peer, and SSH event log with geo-IP enrichment.
 - **Bootstraps the admin peer** locally — private key never leaves your machine.
+
+![Dashboard - Peer Provisioning](docs/assets/dashboard-provision.png)
+*(One-click peer generation with automatic CIDR mapping and QR code rendering for mobile devices)*
 
 ## Architecture
 
