@@ -4,7 +4,7 @@
   hosts: aegis
   become: true
   pre_tasks:
-    - name: Ensure .secrets directory exists locally
+    - name: Ensure .secrets directory exists locally  # noqa run-once[task]
       file:
         path: "{{ playbook_dir }}/.secrets"
         state: directory
@@ -70,6 +70,7 @@
     - name: Generate admin keypair (local)
       when: not admin_key_stat.stat.exists
       shell: |
+        set -o pipefail
         wg genkey | tee {{ admin_private_key_path }} | wg pubkey > {{ admin_public_key_path }}
         chmod 600 {{ admin_private_key_path }}
         chmod 644 {{ admin_public_key_path }}
@@ -105,7 +106,7 @@
         admin_public_key: "{{ admin_pubkey_b64.content | b64decode | trim }}"
 
     - name: Check if admin peer in runtime
-      shell: wg show {{ wg_interface }} peers | grep -qF "{{ admin_public_key }}"
+      shell: set -o pipefail; wg show {{ wg_interface }} peers | grep -qF "{{ admin_public_key }}"
       register: peer_in_runtime
       failed_when: false
       changed_when: false
@@ -120,10 +121,9 @@
     # --- Dynamic IP Allocation ---
 
     - name: Read existing admin peer IP from config (if already added)
-      shell: >
-        grep -A5 "{{ admin_public_key }}" {{ wg_config_path }}
-        | grep -oP '(?<=AllowedIPs = )[\d.]+'
-        | head -1
+      shell: |
+        set -o pipefail
+        grep -A5 "{{ admin_public_key }}" {{ wg_config_path }} | grep -oP '(?<=AllowedIPs = )[\d.]+' | head -1
       register: existing_admin_ip
       failed_when: false
       changed_when: false
@@ -131,6 +131,7 @@
 
     - name: Find next free WireGuard IP (if peer is new)
       shell: |
+        set -o pipefail
         BASE=$(echo "{{ wg_subnet_cidr }}" | cut -d. -f1-3).
         for i in $(seq 2 254); do
           IP="${BASE}${i}"

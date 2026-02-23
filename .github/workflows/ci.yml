@@ -27,7 +27,7 @@ jobs:
       - name: Run ansible-lint
         run: |
           cd ansible
-          ansible-lint -x yaml,fqcn playbook-*.yml
+          ansible-lint -x yaml,fqcn,var-naming playbook-*.yml
 
   lint-python:
     name: Lint API

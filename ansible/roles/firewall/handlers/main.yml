@@ -3,3 +3,4 @@
 - name: Save iptables rules
   command: netfilter-persistent save
   become: true
+  changed_when: true
