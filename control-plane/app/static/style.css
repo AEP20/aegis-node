@@ -264,6 +264,78 @@ input::placeholder { color: var(--text-dim); }
   color: var(--text-muted);
 }
 
+.sidebar-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.transport-mark,
+.transport-badge-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+}
+
+.transport-mark {
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+
+.transport-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.transport-meta-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.transport-meta-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transport-mark-wireguard,
+.transport-badge.transport-wireguard .transport-badge-mark {
+  background: var(--accent-lo);
+  color: var(--accent);
+  border: 1px solid rgba(108,99,255,.34);
+}
+
+.transport-mark-amneziawg,
+.transport-badge.transport-amneziawg .transport-badge-mark {
+  background: rgba(61,220,132,.1);
+  color: var(--green);
+  border: 1px solid rgba(61,220,132,.34);
+}
+
+.transport-mark-unknown,
+.transport-badge.transport-unknown .transport-badge-mark {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border-hi);
+}
+
 /* ── Content ────────────────────────────────────────────── */
 .content {
   flex: 1;
@@ -277,10 +349,70 @@ input::placeholder { color: var(--text-dim); }
 .page-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 4px;
+  gap: 16px;
 }
 .page-header h1 {
   font-size: 20px; font-weight: 600;
-  letter-spacing: -.01em;
+  letter-spacing: 0;
+}
+
+.page-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.transport-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 210px;
+  max-width: 280px;
+  min-height: 42px;
+  padding: 7px 12px 7px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.transport-badge-mark {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+.transport-badge-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.transport-badge-kicker {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.transport-badge-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transport-badge.transport-amneziawg {
+  border-color: rgba(61,220,132,.26);
+  background: linear-gradient(90deg, rgba(61,220,132,.08), rgba(108,99,255,.06));
+}
+
+.transport-badge.transport-wireguard {
+  border-color: rgba(108,99,255,.26);
 }
 
 /* ── Cards ──────────────────────────────────────────────── */
@@ -902,8 +1034,21 @@ input::placeholder { color: var(--text-dim); }
   .stat-value { font-size: 20px; }
 
   /* Page header */
-  .page-header { margin-bottom: 12px; }
+  .page-header {
+    align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .page-title-wrap {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
   .page-header h1 { font-size: 17px; }
+  .transport-badge {
+    width: min(100%, 280px);
+    min-width: 0;
+  }
 
   /* Peer row: stack layout */
   .peer-row {

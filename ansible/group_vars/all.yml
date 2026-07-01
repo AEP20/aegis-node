@@ -151,10 +151,19 @@ dns_enable: true
 # false = client may use its own DNS (risk of DNS leak)
 wg_dns_enforce: true
 
-# Upstream DNS servers for Unbound forwarding
+# Encrypt DNS queries to upstream resolvers (DNS-over-TLS, port 853).
+# true  = upstream queries are TLS-encrypted; Webdock cannot read DNS traffic.
+# false = plain UDP/53 (original behaviour).
+dns_dot_enabled: true
+
+# Upstream DNS servers for Unbound forwarding.
+# Each entry requires addr and tls_name (used for certificate verification).
+# tls_name must match the resolver's TLS certificate CN/SAN.
 dns_upstream_servers:
-  - "1.1.1.1"  # Cloudflare
-  - "1.0.0.1"
+  - addr: "1.1.1.1"
+    tls_name: "cloudflare-dns.com"
+  - addr: "1.0.0.1"
+    tls_name: "cloudflare-dns.com"
 
 
 

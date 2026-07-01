@@ -2,6 +2,8 @@
 # Active paths and interface values come from group_vars/all.yml.
 
 amneziawg_apt_ppa: "ppa:amnezia/ppa"
+amneziawg_apt_repository_retries: 5
+amneziawg_apt_repository_delay: 15
 amneziawg_package_name: "amneziawg"
 amneziawg_config_dir: "{{ vpn_config_path | dirname }}"
 amneziawg_inactive_wireguard_service: "wg-quick@wg0"

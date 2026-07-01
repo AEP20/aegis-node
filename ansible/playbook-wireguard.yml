@@ -3,6 +3,10 @@
 - name: Aegis Provision
   hosts: aegis
   become: true
+  vars:
+    admin_key_dir: "{{ playbook_dir }}/../peers"
+    admin_private_key_path: "{{ admin_key_dir }}/admin_private.key"
+    admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
   vars_prompt:
     - name: vpn_transport
       prompt: "VPN transport [wireguard/amneziawg]"
@@ -111,50 +115,27 @@
           - "Endpoint  : {{ ansible_host }}:{{ wg_port }}"
           - "Config    : {{ wg_config_path }}"
 
-
-# ──────────────────────────────────────────────────────────────────
-# Admin Peer Bootstrap (Optional)
-#
-# To activate, set in group_vars/all.yml:
-#   wg_bootstrap_admin: true
-#
-# Process:
-#   1. Generates wg keypair on the local machine (the playbook runner)
-#   2. Registers the public key to the VPS as a peer (runtime + persist)
-#   3. Writes peers/admin.conf locally (for selected backend client import)
-#
-# Features:
-#   - Does NOT install any client software or modify host system config
-#   - The private key NEVER leaves the local machine
-#   - Idempotent: skips if the admin peer is already registered
-# ──────────────────────────────────────────────────────────────────
-
-- name: Bootstrap Admin Peer (local key generation)
-  hosts: localhost
-  gather_facts: false
-  vars:
-    admin_key_dir: "{{ playbook_dir }}/../peers"
-    admin_private_key_path: "{{ admin_key_dir }}/admin_private.key"
-    admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
-
-  tasks:
-    - name: Skip unless admin bootstrap is enabled
-      meta: end_play
-      when: not (wg_bootstrap_admin | default(false) | bool)
-
     - name: Ensure peers/ directory exists locally
       file:
         path: "{{ admin_key_dir }}"
         state: directory
         mode: "0700"
+      delegate_to: localhost
+      become: false
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Check if admin private key already exists
       stat:
         path: "{{ admin_private_key_path }}"
       register: admin_key_stat
+      delegate_to: localhost
+      become: false
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Generate admin keypair (local)
-      when: not admin_key_stat.stat.exists
+      when:
+        - wg_bootstrap_admin | default(false) | bool
+        - not admin_key_stat.stat.exists
       shell: |
         set -o pipefail
         wg genkey | tee {{ admin_private_key_path }} | wg pubkey > {{ admin_public_key_path }}
@@ -164,21 +145,8 @@
         executable: /bin/bash
         creates: "{{ admin_private_key_path }}"
       changed_when: not admin_key_stat.stat.exists
-
-
-- name: Bootstrap Admin Peer (register on VPS)
-  hosts: aegis
-  become: true
-  gather_facts: false
-  vars:
-    admin_key_dir: "{{ playbook_dir }}/../peers"
-    admin_private_key_path: "{{ admin_key_dir }}/admin_private.key"
-    admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
-
-  tasks:
-    - name: Skip unless admin bootstrap is enabled
-      meta: end_play
-      when: not (wg_bootstrap_admin | default(false) | bool)
+      delegate_to: localhost
+      become: false
 
     - name: Read admin public key
       slurp:
@@ -186,16 +154,19 @@
       delegate_to: localhost
       become: false
       register: admin_pubkey_b64
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Set admin_public_key fact
       set_fact:
         admin_public_key: "{{ admin_pubkey_b64.content | b64decode | trim }}"
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Check if admin peer in runtime
       shell: set -o pipefail; {{ 'awg' if vpn_transport == 'amneziawg' else 'wg' }} show {{ wg_interface }} peers | grep -qF "{{ admin_public_key }}"
       register: peer_in_runtime
       failed_when: false
       changed_when: false
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Check if admin peer in wg config
       command: grep -qF "{{ admin_public_key }}" {{ wg_config_path }}
@@ -203,6 +174,7 @@
       failed_when: false
       changed_when: false
       become: true
+      when: wg_bootstrap_admin | default(false) | bool
 
     # --- Dynamic IP Allocation ---
 
@@ -214,6 +186,7 @@
       failed_when: false
       changed_when: false
       become: true
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Find next free VPN IP (if peer is new)
       shell: |
@@ -228,7 +201,9 @@
         done
         exit 1
       register: next_free_ip
-      when: peer_in_config.rc != 0
+      when:
+        - wg_bootstrap_admin | default(false) | bool
+        - peer_in_config.rc != 0
       become: true
       changed_when: false
 
@@ -240,13 +215,16 @@
           {%- else -%}
             {{ next_free_ip.stdout | trim }}
           {%- endif -%}
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Add admin peer to active VPN backend (runtime)
       command: >
         {{ 'awg' if vpn_transport == 'amneziawg' else 'wg' }} set {{ wg_interface }}
         peer {{ admin_public_key }}
         allowed-ips {{ admin_peer_ip }}/32
-      when: peer_in_runtime.rc != 0
+      when:
+        - wg_bootstrap_admin | default(false) | bool
+        - peer_in_runtime.rc != 0
       changed_when: true
 
     - name: Persist admin peer to active backend config
@@ -257,12 +235,15 @@
           [Peer]
           PublicKey = {{ admin_public_key }}
           AllowedIPs = {{ admin_peer_ip }}/32
-      when: peer_in_config.rc != 0
+      when:
+        - wg_bootstrap_admin | default(false) | bool
+        - peer_in_config.rc != 0
 
     - name: Read server public key
       slurp:
         src: "{{ dashboard_app_dir }}/server_public.key"
       register: server_pubkey_b64
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Read admin private key (local)
       slurp:
@@ -270,6 +251,7 @@
       delegate_to: localhost
       become: false
       register: admin_privkey_b64
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Write admin VPN config locally
       copy:
@@ -299,6 +281,7 @@
         mode: "0600"
       delegate_to: localhost
       become: false
+      when: wg_bootstrap_admin | default(false) | bool
 
     - name: Provisioning summary
       delegate_to: localhost
@@ -326,3 +309,4 @@
           - ""
           - "══════════════════════════════════════════════════════════════"
           - ""
+      when: wg_bootstrap_admin | default(false) | bool

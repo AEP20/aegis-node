@@ -58,6 +58,13 @@
       </nav>
 
       <div class="sidebar-footer">
+        <div id="sidebar-transport" class="sidebar-transport">
+          <span class="transport-mark transport-mark-unknown">?</span>
+          <span class="transport-meta">
+            <span class="transport-meta-label">transport</span>
+            <span id="sidebar-transport-name" class="transport-meta-name">—</span>
+          </span>
+        </div>
         <div class="status-dot-wrap">
           <span id="vpn-dot" class="status-dot dot-unknown"></span>
           <span id="vpn-label" class="status-label">checking…</span>
@@ -72,7 +79,16 @@
       <!-- Overview tab -->
       <section id="tab-overview" class="tab active">
         <header class="page-header">
-          <h1>Overview</h1>
+          <div class="page-title-wrap">
+            <h1>Overview</h1>
+            <div id="transport-badge" class="transport-badge transport-unknown">
+              <span id="transport-badge-mark" class="transport-badge-mark">?</span>
+              <span class="transport-badge-copy">
+                <span class="transport-badge-kicker">active transport</span>
+                <span id="transport-badge-name" class="transport-badge-name">—</span>
+              </span>
+            </div>
+          </div>
           <button id="refresh-btn" class="btn btn-secondary">↻ refresh</button>
         </header>
 

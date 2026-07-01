@@ -111,4 +111,5 @@
     name: aegis-api
     enabled: true
     state: restarted
+    daemon_reload: true
   become: true

@@ -5,4 +5,5 @@
     name: unbound
     state: restarted
     enabled: true
+    daemon_reload: true
   become: true

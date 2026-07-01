@@ -163,10 +163,35 @@ function renderHealth(d) {
   if (subnetEl) subnetEl.textContent = d.server_ip ? d.server_ip.replace(/\.\d+$/, ".0/24") : "10.66.66.0/24";
   if (interfaceEl) interfaceEl.textContent = d.interface || "—";
   if (transportEl) transportEl.textContent = d.transport_label || d.transport || "—";
+  renderTransportBadge(d);
   updateProvisionCopy();
 }
 
 document.getElementById("refresh-btn").addEventListener("click", loadOverview);
+
+function renderTransportBadge(d) {
+  const transport = (d.transport || activeTransport.transport || "unknown").toLowerCase();
+  const label = d.transport_label || activeTransport.transport_label || transport || "—";
+  const mark = transport === "amneziawg" ? "AWG" : transport === "wireguard" ? "WG" : "?";
+
+  const badge = document.getElementById("transport-badge");
+  const badgeMark = document.getElementById("transport-badge-mark");
+  const badgeName = document.getElementById("transport-badge-name");
+  const sidebar = document.getElementById("sidebar-transport");
+  const sidebarMark = sidebar?.querySelector(".transport-mark");
+  const sidebarName = document.getElementById("sidebar-transport-name");
+
+  if (badge) badge.className = `transport-badge transport-${transport}`;
+  if (badgeMark) badgeMark.textContent = mark;
+  if (badgeName) badgeName.textContent = label;
+
+  if (sidebar) sidebar.title = `Active transport: ${label}`;
+  if (sidebarMark) {
+    sidebarMark.className = `transport-mark transport-mark-${transport}`;
+    sidebarMark.textContent = mark;
+  }
+  if (sidebarName) sidebarName.textContent = label;
+}
 
 // ── Peers ─────────────────────────────────────────────────
 

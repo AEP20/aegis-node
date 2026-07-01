@@ -106,6 +106,43 @@
   become: true
   notify: Save iptables rules
 
+- name: Remove inactive backend inbound interface rules
+  iptables:
+    chain: INPUT
+    in_interface: "{{ item.value.interface }}"
+    jump: ACCEPT
+    state: absent
+  loop: "{{ vpn_transport_backends | dict2items }}"
+  when: item.key != vpn_transport
+  become: true
+  notify: Save iptables rules
+
+- name: Remove inactive backend DNS allow rules (UDP)
+  iptables:
+    chain: INPUT
+    in_interface: "{{ item.value.interface }}"
+    protocol: udp
+    destination_port: 53
+    jump: ACCEPT
+    state: absent
+  loop: "{{ vpn_transport_backends | dict2items }}"
+  when: item.key != vpn_transport
+  become: true
+  notify: Save iptables rules
+
+- name: Remove inactive backend DNS allow rules (TCP)
+  iptables:
+    chain: INPUT
+    in_interface: "{{ item.value.interface }}"
+    protocol: tcp
+    destination_port: 53
+    jump: ACCEPT
+    state: absent
+  loop: "{{ vpn_transport_backends | dict2items }}"
+  when: item.key != vpn_transport
+  become: true
+  notify: Save iptables rules
+
 - name: Allow all inbound from active VPN interface
   iptables:
     chain: INPUT
@@ -122,7 +159,7 @@
     protocol: udp
     destination_port: 53
     jump: ACCEPT
-    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+    state: "{{ 'present' if dns_enable and wg_dns_enforce else 'absent' }}"
   become: true
   notify: Save iptables rules
 
@@ -133,7 +170,7 @@
     protocol: tcp
     destination_port: 53
     jump: ACCEPT
-    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+    state: "{{ 'present' if dns_enable and wg_dns_enforce else 'absent' }}"
   become: true
   notify: Save iptables rules
 

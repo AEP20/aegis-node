@@ -1,13 +1,16 @@
 # roles/amneziawg/tasks/main.yml
 
-- name: Ensure AmneziaWG obfuscation defaults are resolved
+- name: Resolve AmneziaWG obfuscation preset (default to balanced)
   set_fact:
     amneziawg_obfuscation_preset: "{{ amneziawg_obfuscation_preset | default('balanced') }}"
+
+- name: Resolve AmneziaWG obfuscation parameters from preset
+  set_fact:
     amneziawg_obfuscation: >-
       {{
         amneziawg_obfuscation
         | default(
-            amneziawg_obfuscation_presets[amneziawg_obfuscation_preset | default('balanced')]
+            amneziawg_obfuscation_presets[amneziawg_obfuscation_preset]
             | combine(amneziawg_obfuscation_overrides | default({}), recursive=True)
           )
       }}
@@ -18,7 +21,7 @@
       - software-properties-common
       - python3-launchpadlib
       - gnupg2
-      - "linux-headers-{{ ansible_kernel }}"
+      - "linux-headers-{{ ansible_facts['kernel'] }}"
       - iptables
       - iptables-persistent
     state: present
@@ -31,6 +34,10 @@
     state: present
     update_cache: yes
   become: true
+  register: amneziawg_apt_repository_result
+  until: amneziawg_apt_repository_result is succeeded
+  retries: "{{ amneziawg_apt_repository_retries }}"
+  delay: "{{ amneziawg_apt_repository_delay }}"
 
 - name: Install AmneziaWG package
   apt:
@@ -38,11 +45,24 @@
     state: present
     update_cache: yes
   become: true
+  register: amneziawg_package_result
+  until: amneziawg_package_result is succeeded
+  retries: 3
+  delay: 10
 
 - name: Load AmneziaWG kernel module
   modprobe:
     name: amneziawg
     state: present
+  become: true
+
+- name: Persist AmneziaWG kernel module across reboots
+  copy:
+    dest: /etc/modules-load.d/amneziawg.conf
+    content: "amneziawg\n"
+    owner: root
+    group: root
+    mode: "0644"
   become: true
 
 - name: Enable IPv4 forwarding (runtime)

@@ -28,8 +28,20 @@ server:
 
     prefetch: yes
 
+{% if dns_dot_enabled | default(false) %}
+    # TLS certificate bundle for upstream DoT verification
+    tls-cert-bundle: "/etc/ssl/certs/ca-certificates.crt"
+{% endif %}
+
 forward-zone:
     name: "."
-{% for addr in dns_upstream_servers %}
-    forward-addr: {{ addr }}
+{% if dns_dot_enabled | default(false) %}
+    forward-tls-upstream: yes
+{% for s in dns_upstream_servers %}
+    forward-addr: {{ s.addr }}@853#{{ s.tls_name }}
 {% endfor %}
+{% else %}
+{% for s in dns_upstream_servers %}
+    forward-addr: {{ s.addr }}
+{% endfor %}
+{% endif %}

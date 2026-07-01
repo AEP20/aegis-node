@@ -19,6 +19,58 @@
   when: dns_enable
   notify: Restart unbound
 
+- name: Ensure unbound systemd drop-in directory exists
+  file:
+    path: /etc/systemd/system/unbound.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+  when: dns_enable
+
+- name: Order unbound after active VPN service
+  copy:
+    dest: /etc/systemd/system/unbound.service.d/after-vpn.conf
+    content: |
+      [Unit]
+      After={{ vpn_service_unit }}
+      Wants={{ vpn_service_unit }}
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  when: dns_enable
+  notify: Restart unbound
+
+- name: Remove inactive backend DNS redirect (UDP 53)
+  iptables:
+    table: nat
+    chain: PREROUTING
+    in_interface: "{{ item.value.interface }}"
+    protocol: udp
+    destination_port: 53
+    jump: DNAT
+    to_destination: "{{ wg_server_ip }}:53"
+    state: absent
+  loop: "{{ vpn_transport_backends | dict2items }}"
+  when: item.key != vpn_transport
+  become: true
+
+- name: Remove inactive backend DNS redirect (TCP 53)
+  iptables:
+    table: nat
+    chain: PREROUTING
+    in_interface: "{{ item.value.interface }}"
+    protocol: tcp
+    destination_port: 53
+    jump: DNAT
+    to_destination: "{{ wg_server_ip }}:53"
+    state: absent
+  loop: "{{ vpn_transport_backends | dict2items }}"
+  when: item.key != vpn_transport
+  become: true
+
 - name: Redirect VPN DNS (UDP 53) to local unbound
   iptables:
     table: nat
@@ -28,9 +80,9 @@
     destination_port: 53
     jump: DNAT
     to_destination: "{{ wg_server_ip }}:53"
-    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+    state: "{{ 'present' if dns_enable and wg_dns_enforce else 'absent' }}"
   become: true
-  when: dns_enable
+
 
 - name: Redirect VPN DNS (TCP 53) to local unbound
   iptables:
@@ -41,6 +93,5 @@
     destination_port: 53
     jump: DNAT
     to_destination: "{{ wg_server_ip }}:53"
-    state: "{{ 'present' if wg_dns_enforce else 'absent' }}"
+    state: "{{ 'present' if dns_enable and wg_dns_enforce else 'absent' }}"
   become: true
-  when: dns_enable

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+# !/usr/bin/env bash
 # deploy-panel.sh — Deploys only the control-plane.
 # Usage:
 #   ./deploy-panel.sh              # Automatically reads ansible_host IP from hosts.ini
