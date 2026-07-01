@@ -69,8 +69,34 @@
   become: true
   notify: Save iptables rules
 
-# 4) Allow WireGuard UDP
-- name: Allow WireGuard (udp/{{ wg_port }})
+# 4) Allow active VPN transport UDP
+- name: Remove retired VPN UDP ports
+  iptables:
+    chain: INPUT
+    protocol: udp
+    destination_port: "{{ item }}"
+    jump: ACCEPT
+    state: absent
+  loop: "{{ vpn_retired_udp_ports | default([]) }}"
+  when: item | int != wg_port | int
+  become: true
+  notify: Save iptables rules
+
+- name: Remove inactive backend UDP ports
+  iptables:
+    chain: INPUT
+    protocol: udp
+    destination_port: "{{ item.value.port }}"
+    jump: ACCEPT
+    state: absent
+  loop: "{{ vpn_transport_backends | dict2items }}"
+  when:
+    - item.key != vpn_transport
+    - item.value.port | int != wg_port | int
+  become: true
+  notify: Save iptables rules
+
+- name: Allow active VPN transport (udp/{{ wg_port }})
   iptables:
     chain: INPUT
     protocol: udp
@@ -80,7 +106,7 @@
   become: true
   notify: Save iptables rules
 
-- name: Allow all inbound from WireGuard interface
+- name: Allow all inbound from active VPN interface
   iptables:
     chain: INPUT
     in_interface: "{{ wg_interface }}"

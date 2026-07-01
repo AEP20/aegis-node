@@ -20,10 +20,91 @@
 
 
 # =============================================================================
-# WireGuard
+# VPN Transport
 # =============================================================================
-# Defines the VPN interface, addressing model, and core tunnel behavior.
-# These values directly influence routing, firewall rules, and wg0.conf.
+# Selects the VPN transport backend. WireGuard is the default; AmneziaWG is
+# available for networks where standard WireGuard is unreliable.
+# =============================================================================
+
+vpn_transport: "wireguard"  # wireguard | amneziawg
+
+vpn_transport_backends:
+  wireguard:
+    label: "WireGuard"
+    implemented: true
+    interface: "wg0"
+    port: 4500
+    config_path: "/etc/wireguard/wg0.conf"
+    private_key_path: "/etc/wireguard/server_private.key"
+    public_key_path: "/etc/wireguard/server_public.key"
+    service_name: "wg-quick@wg0"
+    service_unit: "wg-quick@wg0.service"
+  amneziawg:
+    label: "AmneziaWG"
+    implemented: true
+    interface: "awg0"
+    port: 4500
+    config_path: "/etc/amnezia/amneziawg/awg0.conf"
+    private_key_path: "/etc/amnezia/amneziawg/server_private.key"
+    public_key_path: "/etc/amnezia/amneziawg/server_public.key"
+    service_name: "awg-quick@awg0"
+    service_unit: "awg-quick@awg0.service"
+
+vpn_active_backend: "{{ vpn_transport_backends[vpn_transport] }}"
+vpn_transport_label: "{{ vpn_active_backend.label }}"
+vpn_interface: "{{ vpn_active_backend.interface }}"
+vpn_port: "{{ vpn_active_backend.port }}"
+vpn_config_path: "{{ vpn_active_backend.config_path }}"
+vpn_private_key_path: "{{ vpn_active_backend.private_key_path }}"
+vpn_public_key_path: "{{ vpn_active_backend.public_key_path }}"
+vpn_service_name: "{{ vpn_active_backend.service_name }}"
+vpn_service_unit: "{{ vpn_active_backend.service_unit }}"
+vpn_inactive_config_suffix: ".disabled-by-aegis"
+vpn_retired_udp_ports:
+  - 51820
+
+amneziawg_obfuscation_presets:
+  balanced:
+    label: "Balanced"
+    jc: 4
+    jmin: 64
+    jmax: 96
+    s1: 0
+    s2: 0
+    h1: 1
+    h2: 2
+    h3: 3
+    h4: 4
+  carrier:
+    label: "Carrier conservative"
+    jc: 3
+    jmin: 64
+    jmax: 128
+    s1: 0
+    s2: 0
+    h1: 1
+    h2: 2
+    h3: 3
+    h4: 4
+  quiet:
+    label: "Low overhead"
+    jc: 1
+    jmin: 64
+    jmax: 64
+    s1: 0
+    s2: 0
+    h1: 1
+    h2: 2
+    h3: 3
+    h4: 4
+
+
+
+# =============================================================================
+# VPN Network
+# =============================================================================
+# Defines the VPN addressing model and core tunnel behavior.
+# These values directly influence routing, firewall rules, and backend config.
 # =============================================================================
 
 # Complete VPN subnet (used for routing + firewall source rules)
@@ -33,17 +114,23 @@ wg_subnet_cidr: "10.66.66.0/24"
 # Also used as the DNS resolver address if DNS is enabled
 wg_server_ip: "10.66.66.1"
 
-# Full interface address (used in wg0.conf [Interface] Address field)
+# Full interface address (used in the active backend [Interface] Address field)
 wg_server_address: "10.66.66.1/24"
 
-# UDP port WireGuard listens on (firewall opens this port)
-wg_port: 51820
+# UDP port the active VPN transport listens on (firewall opens this port)
+# UDP/4500 is commonly allowed on mobile networks because it is used by IPsec NAT-T.
+wg_port: "{{ vpn_port }}"
 
-# WireGuard interface name (creates /etc/wireguard/<wg_interface>.conf)
-wg_interface: "wg0"
+# Active VPN interface name
+wg_interface: "{{ vpn_interface }}"
 
-# Absolute path to the WireGuard configuration file
-wg_config_path: "/etc/wireguard/{{ wg_interface }}.conf"
+# Absolute path to the active backend configuration file
+wg_config_path: "{{ vpn_config_path }}"
+
+# Active backend key paths. Kept under wg_* names for compatibility until
+# the control plane gets a transport-neutral adapter.
+wg_private_key_path: "{{ vpn_private_key_path }}"
+wg_public_key_path: "{{ vpn_public_key_path }}"
 
 # IPv6 support toggle
 # false = disables IPv6 across sysctl + firewall
@@ -104,7 +191,7 @@ ssh_pubkey_auth: "yes"
 # Reverse Path Filtering (anti-spoofing)
 # Mode:
 #   1 → strict
-#   2 → loose (recommended for WireGuard environments)
+#   2 → loose (recommended for VPN tunnel environments)
 wg_enable_rp_filter: true
 wg_rp_filter_mode: 2
 
@@ -176,7 +263,7 @@ dashboard_allow_reboot: true
 # Automatically provisions the machine running the playbook as a VPN peer.
 #
 # Process:
-#   1. Generates WireGuard keypair locally (private key never leaves host)
+#   1. Generates VPN keypair locally (private key never leaves host)
 #   2. Registers public key as server peer
 #   3. Dynamically assigns available IP from wg_subnet_cidr
 #   4. Writes peers/admin.conf locally for import
@@ -187,4 +274,4 @@ dashboard_allow_reboot: true
 wg_bootstrap_admin: true
 # NOTE:
 # admin_peer_ip is intentionally not defined.
-# IP allocation is dynamically calculated from existing wg0.conf.
+# IP allocation is dynamically calculated from the active backend config.

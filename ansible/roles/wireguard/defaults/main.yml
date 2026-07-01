@@ -6,3 +6,6 @@ wg_full_tunnel: true          # client AllowedIPs = 0.0.0.0/0 (Full tunnel targe
 
 wg_private_key_path: "/etc/wireguard/server_private.key"
 wg_public_key_path: "/etc/wireguard/server_public.key"
+wireguard_inactive_amneziawg_service: "awg-quick@awg0"
+wireguard_inactive_amneziawg_config: "/etc/amnezia/amneziawg/awg0.conf"
+wireguard_inactive_amneziawg_backup: "{{ wireguard_inactive_amneziawg_config }}{{ vpn_inactive_config_suffix }}"

@@ -1,7 +1,7 @@
 [Unit]
 Description=Aegis Control Plane API
-After=network.target wg-quick@{{ wg_interface }}.service
-Requires=wg-quick@{{ wg_interface }}.service
+After=network.target {{ vpn_service_unit }}
+Requires={{ vpn_service_unit }}
 
 [Service]
 User={{ aegis_system_user }}
@@ -10,13 +10,35 @@ WorkingDirectory={{ dashboard_app_dir }}
 
 Environment="AEGIS_AUTH_ENABLED={{ 'true' if dashboard_enable_auth else 'false' }}"
 Environment="AEGIS_AUTH_TOKEN={{ dashboard_auth_token }}"
+Environment="VPN_TRANSPORT={{ vpn_transport }}"
+Environment="VPN_TRANSPORT_LABEL={{ vpn_transport_label }}"
+Environment="VPN_CLI={{ 'awg' if vpn_transport == 'amneziawg' else 'wg' }}"
+Environment="VPN_INTERFACE={{ wg_interface }}"
+Environment="VPN_SUBNET_BASE={{ wg_server_ip | regex_replace('\\.[0-9]+$', '.') }}"
+Environment="VPN_SERVER_IP={{ wg_server_ip }}"
+Environment="VPN_ENDPOINT={{ ansible_host }}:{{ wg_port }}"
+Environment="VPN_CONFIG_PATH={{ wg_config_path }}"
+Environment="VPN_SERVER_PUBLIC_KEY_PATH={{ dashboard_app_dir }}/server_public.key"
+Environment="VPN_SERVICE_NAME={{ vpn_service_name }}"
 Environment="WG_INTERFACE={{ wg_interface }}"
 Environment="WG_SUBNET_BASE={{ wg_server_ip | regex_replace('\\.[0-9]+$', '.') }}"
 Environment="WG_ENDPOINT={{ ansible_host }}:{{ wg_port }}"
+Environment="WG_CONFIG_PATH={{ wg_config_path }}"
 Environment="WG_SERVER_PUBLIC_KEY_PATH={{ dashboard_app_dir }}/server_public.key"
 Environment="PEER_LABELS_PATH={{ dashboard_labels_path }}"
 Environment="GEO_DB_PATH={{ dashboard_geo_db_path }}"
 Environment="WG_HANDSHAKE_THRESHOLD={{ wg_handshake_threshold }}"
+{% if vpn_transport == "amneziawg" %}
+Environment="AMNEZIAWG_JC={{ amneziawg_obfuscation.jc }}"
+Environment="AMNEZIAWG_JMIN={{ amneziawg_obfuscation.jmin }}"
+Environment="AMNEZIAWG_JMAX={{ amneziawg_obfuscation.jmax }}"
+Environment="AMNEZIAWG_S1={{ amneziawg_obfuscation.s1 }}"
+Environment="AMNEZIAWG_S2={{ amneziawg_obfuscation.s2 }}"
+Environment="AMNEZIAWG_H1={{ amneziawg_obfuscation.h1 }}"
+Environment="AMNEZIAWG_H2={{ amneziawg_obfuscation.h2 }}"
+Environment="AMNEZIAWG_H3={{ amneziawg_obfuscation.h3 }}"
+Environment="AMNEZIAWG_H4={{ amneziawg_obfuscation.h4 }}"
+{% endif %}
 
 ExecStart={{ dashboard_venv_dir }}/bin/uvicorn app.main:app \
   --host {{ dashboard_bind_host }} \

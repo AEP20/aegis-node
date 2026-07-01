@@ -56,7 +56,7 @@
       # Add a single clean rule
       iptables -t nat -A POSTROUTING \
                -s "$SOURCE" -o "$IFACE" \
-               -m comment --comment "WireGuard NAT" \
+               -m comment --comment "Aegis VPN NAT" \
                -j MASQUERADE
   become: true
   changed_when: true
@@ -121,6 +121,15 @@
     mode: "0644"
   become: true
 
+- name: Restore quarantined WireGuard config if present
+  command: >
+    mv {{ wg_config_path }}{{ vpn_inactive_config_suffix }}
+    {{ wg_config_path }}
+  args:
+    creates: "{{ wg_config_path }}"
+    removes: "{{ wg_config_path }}{{ vpn_inactive_config_suffix }}"
+  become: true
+
 - name: Create wg0 configuration file
   template:
     src: wg0.conf.j2
@@ -132,10 +141,51 @@
   become: true
   notify: Restart WireGuard
 
+- name: Ensure WireGuard interface address is current
+  lineinfile:
+    path: "{{ wg_config_path }}"
+    regexp: '^Address\s*='
+    insertafter: '^\[Interface\]'
+    line: "Address = {{ wg_server_address }}"
+  become: true
+  notify: Restart WireGuard
+
+- name: Ensure WireGuard listen port is current
+  lineinfile:
+    path: "{{ wg_config_path }}"
+    regexp: '^ListenPort\s*='
+    insertafter: '^Address\s*='
+    line: "ListenPort = {{ wg_port }}"
+  become: true
+  notify: Restart WireGuard
+
+- name: Check if inactive AmneziaWG config exists
+  stat:
+    path: "{{ wireguard_inactive_amneziawg_config }}"
+  register: inactive_amneziawg_config_stat
+  become: true
+
+- name: Stop and disable inactive AmneziaWG service
+  systemd:
+    name: "{{ wireguard_inactive_amneziawg_service }}"
+    enabled: false
+    state: stopped
+  become: true
+  failed_when: false
+
 - name: Enable and start WireGuard interface
   systemd:
-    name: "wg-quick@{{ wg_interface }}"
+    name: "{{ vpn_service_name }}"
     enabled: true
     state: started
   become: true
 
+- name: Quarantine inactive AmneziaWG config
+  command: >
+    mv {{ wireguard_inactive_amneziawg_config }}
+    {{ wireguard_inactive_amneziawg_backup }}
+  args:
+    creates: "{{ wireguard_inactive_amneziawg_backup }}"
+    removes: "{{ wireguard_inactive_amneziawg_config }}"
+  become: true
+  when: inactive_amneziawg_config_stat.stat.exists

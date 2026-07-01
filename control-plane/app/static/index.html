@@ -103,7 +103,9 @@
             <span class="info-key">subnet</span>
             <span id="info-subnet" class="info-val mono">—</span>
             <span class="info-key">interface</span>
-            <span class="info-val mono">wg0</span>
+            <span id="info-interface" class="info-val mono">—</span>
+            <span class="info-key">transport</span>
+            <span id="info-transport" class="info-val mono">—</span>
             <span class="info-key">api</span>
             <span class="info-val mono">aegis-api.service</span>
           </div>
@@ -142,11 +144,7 @@
         </header>
 
         <div class="card provision-card">
-          <p class="provision-desc">
-            Generates a fresh WireGuard keypair, allocates the next available IP,
-            adds the peer to the live interface and config, then returns the client
-            config and a scan-ready QR code.
-          </p>
+          <p id="provision-desc" class="provision-desc"></p>
           <button id="provision-btn" class="btn btn-primary">generate &amp; provision</button>
         </div>
 
@@ -154,15 +152,15 @@
           <div class="card qr-card">
             <p class="card-title">
               qr code
-              <span class="info-icon" data-tooltip="Scan with WireGuard mobile app to instantly add this peer">?</span>
+              <span id="qr-tooltip" class="info-icon" data-tooltip="Scan with the compatible mobile VPN app to instantly add this peer">?</span>
             </p>
-            <img id="qr-img" src="" alt="WireGuard QR code" class="qr-image" />
+            <img id="qr-img" src="" alt="VPN profile QR code" class="qr-image" />
           </div>
 
           <div class="card">
             <p class="card-title">
               client config
-              <span class="info-icon" data-tooltip="Download and import into WireGuard desktop apps (macOS, Windows, etc.)">?</span>
+              <span id="config-tooltip" class="info-icon" data-tooltip="Download and import into a compatible desktop VPN app">?</span>
             </p>
             <div class="config-header">
               <span id="peer-ip-label" class="mono tag"></span>
@@ -177,7 +175,7 @@
           <div class="card">
             <p class="card-title">
               linux unattended install
-              <span class="info-icon" data-tooltip="Copy and paste this command into a new server's terminal (e.g. Ubuntu/Debian) to automatically install and configure WireGuard">?</span>
+              <span class="info-icon" data-tooltip="Copy and paste this command into a new server's terminal (e.g. Ubuntu/Debian) to automatically install and configure the active VPN client">?</span>
             </p>
             <div class="config-header" style="margin-bottom: 8px;">
               <span class="mono tag" style="background: rgba(61,220,132,.1); color: var(--green);">magic script</span>

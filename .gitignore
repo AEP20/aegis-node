@@ -20,4 +20,5 @@ dev-docs/*
 .github/ISSUE_TEMPLATE/*
 .github/PULL_REQUEST_TEMPLATE.md
 docs/*
+!docs/amneziawg-transport-plan.md
 SECURITY.md

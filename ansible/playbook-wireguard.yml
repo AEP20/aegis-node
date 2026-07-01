@@ -3,7 +3,81 @@
 - name: Aegis Provision
   hosts: aegis
   become: true
+  vars_prompt:
+    - name: vpn_transport
+      prompt: "VPN transport [wireguard/amneziawg]"
+      default: "wireguard"
+      private: false
   pre_tasks:
+    - name: Validate VPN transport selection
+      assert:
+        that:
+          - vpn_transport is defined
+          - vpn_transport in vpn_transport_backends
+        fail_msg: >-
+          Unsupported vpn_transport='{{ vpn_transport | default("undefined") }}'.
+          Supported values: {{ vpn_transport_backends.keys() | list | join(', ') }}.
+
+    - name: Ensure selected VPN transport is implemented
+      assert:
+        that:
+          - vpn_active_backend.implemented | bool
+        fail_msg: >-
+          vpn_transport='{{ vpn_transport }}' is recognized but not deployable yet.
+          Keep vpn_transport='wireguard' until this backend is implemented.
+
+    - name: Choose AmneziaWG obfuscation preset
+      pause:
+        prompt: >-
+          AmneziaWG obfuscation preset [balanced/carrier/quiet]
+          (default: balanced)
+      register: amneziawg_obfuscation_prompt
+      when:
+        - vpn_transport == "amneziawg"
+        - amneziawg_obfuscation_preset is not defined
+
+    - name: Set AmneziaWG obfuscation preset from prompt
+      set_fact:
+        amneziawg_obfuscation_preset: "{{ (amneziawg_obfuscation_prompt.user_input | default('') | trim) | default('balanced', true) }}"
+      when:
+        - vpn_transport == "amneziawg"
+        - amneziawg_obfuscation_preset is not defined
+
+    - name: Validate AmneziaWG obfuscation preset
+      assert:
+        that:
+          - amneziawg_obfuscation_preset in amneziawg_obfuscation_presets
+        fail_msg: >-
+          Unsupported AmneziaWG obfuscation preset='{{ amneziawg_obfuscation_preset }}'.
+          Supported values: {{ amneziawg_obfuscation_presets.keys() | list | join(', ') }}.
+      when: vpn_transport == "amneziawg"
+
+    - name: Resolve AmneziaWG obfuscation parameters
+      set_fact:
+        amneziawg_obfuscation: >-
+          {{
+            amneziawg_obfuscation_presets[amneziawg_obfuscation_preset]
+            | combine(amneziawg_obfuscation_overrides | default({}), recursive=True)
+          }}
+      when: vpn_transport == "amneziawg"
+
+    - name: Validate AmneziaWG obfuscation parameter ranges
+      assert:
+        that:
+          - amneziawg_obfuscation.jc | int >= 0
+          - amneziawg_obfuscation.jc | int <= 10
+          - amneziawg_obfuscation.jmin | int >= 64
+          - amneziawg_obfuscation.jmax | int <= 1024
+          - amneziawg_obfuscation.jmin | int <= amneziawg_obfuscation.jmax | int
+          - amneziawg_obfuscation.s1 | int >= 0
+          - amneziawg_obfuscation.s1 | int <= 64
+          - amneziawg_obfuscation.s2 | int >= 0
+          - amneziawg_obfuscation.s2 | int <= 64
+        fail_msg: >-
+          Invalid AmneziaWG obfuscation values. Keep Jc in 0..10,
+          Jmin/Jmax in 64..1024 with Jmin <= Jmax, and S1/S2 in 0..64.
+      when: vpn_transport == "amneziawg"
+
     - name: Ensure .secrets directory exists locally  # noqa run-once[task]
       file:
         path: "{{ playbook_dir }}/.secrets"
@@ -19,11 +93,23 @@
 
   roles:
     - system
-    - wireguard
+    - role: wireguard
+      when: vpn_transport == "wireguard"
+    - role: amneziawg
+      when: vpn_transport == "amneziawg"
     - dns
     - firewall
     - hardening
     - dashboard
+
+  post_tasks:
+    - name: Provisioning transport summary
+      debug:
+        msg:
+          - "Transport : {{ vpn_transport_label }} ({{ vpn_transport }})"
+          - "Interface : {{ wg_interface }}"
+          - "Endpoint  : {{ ansible_host }}:{{ wg_port }}"
+          - "Config    : {{ wg_config_path }}"
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -35,7 +121,7 @@
 # Process:
 #   1. Generates wg keypair on the local machine (the playbook runner)
 #   2. Registers the public key to the VPS as a peer (runtime + persist)
-#   3. Writes peers/admin.conf locally (for WireGuard client import)
+#   3. Writes peers/admin.conf locally (for selected backend client import)
 #
 # Features:
 #   - Does NOT install any client software or modify host system config
@@ -52,7 +138,7 @@
     admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
 
   tasks:
-    - name: Skip if wg_bootstrap_admin is false
+    - name: Skip unless admin bootstrap is enabled
       meta: end_play
       when: not (wg_bootstrap_admin | default(false) | bool)
 
@@ -90,7 +176,7 @@
     admin_public_key_path: "{{ admin_key_dir }}/admin_public.key"
 
   tasks:
-    - name: Skip if wg_bootstrap_admin is false
+    - name: Skip unless admin bootstrap is enabled
       meta: end_play
       when: not (wg_bootstrap_admin | default(false) | bool)
 
@@ -106,7 +192,7 @@
         admin_public_key: "{{ admin_pubkey_b64.content | b64decode | trim }}"
 
     - name: Check if admin peer in runtime
-      shell: set -o pipefail; wg show {{ wg_interface }} peers | grep -qF "{{ admin_public_key }}"
+      shell: set -o pipefail; {{ 'awg' if vpn_transport == 'amneziawg' else 'wg' }} show {{ wg_interface }} peers | grep -qF "{{ admin_public_key }}"
       register: peer_in_runtime
       failed_when: false
       changed_when: false
@@ -129,7 +215,7 @@
       changed_when: false
       become: true
 
-    - name: Find next free WireGuard IP (if peer is new)
+    - name: Find next free VPN IP (if peer is new)
       shell: |
         set -o pipefail
         BASE=$(echo "{{ wg_subnet_cidr }}" | cut -d. -f1-3).
@@ -155,15 +241,15 @@
             {{ next_free_ip.stdout | trim }}
           {%- endif -%}
 
-    - name: Add admin peer to WireGuard (runtime)
+    - name: Add admin peer to active VPN backend (runtime)
       command: >
-        wg set {{ wg_interface }}
+        {{ 'awg' if vpn_transport == 'amneziawg' else 'wg' }} set {{ wg_interface }}
         peer {{ admin_public_key }}
         allowed-ips {{ admin_peer_ip }}/32
       when: peer_in_runtime.rc != 0
       changed_when: true
 
-    - name: Persist admin peer to wg config
+    - name: Persist admin peer to active backend config
       blockinfile:
         path: "{{ wg_config_path }}"
         marker: "# {mark} ANSIBLE MANAGED — admin peer"
@@ -185,13 +271,24 @@
       become: false
       register: admin_privkey_b64
 
-    - name: Write admin WireGuard config locally
+    - name: Write admin VPN config locally
       copy:
         content: |
           [Interface]
           PrivateKey = {{ admin_privkey_b64.content | b64decode | trim }}
           Address = {{ admin_peer_ip }}/32
           DNS = {{ wg_server_ip }}
+          {% if vpn_transport == "amneziawg" %}
+          Jc = {{ amneziawg_obfuscation.jc }}
+          Jmin = {{ amneziawg_obfuscation.jmin }}
+          Jmax = {{ amneziawg_obfuscation.jmax }}
+          S1 = {{ amneziawg_obfuscation.s1 }}
+          S2 = {{ amneziawg_obfuscation.s2 }}
+          H1 = {{ amneziawg_obfuscation.h1 }}
+          H2 = {{ amneziawg_obfuscation.h2 }}
+          H3 = {{ amneziawg_obfuscation.h3 }}
+          H4 = {{ amneziawg_obfuscation.h4 }}
+          {% endif %}
 
           [Peer]
           PublicKey = {{ server_pubkey_b64.content | b64decode | trim }}
@@ -214,16 +311,18 @@
           - "══════════════════════════════════════════════════════════════"
           - ""
           - "  VPN IP      : {{ admin_peer_ip }}/32"
+          - "  Transport   : {{ vpn_transport_label }} ({{ vpn_transport }})"
+          - "  Interface   : {{ wg_interface }}"
           - "  Endpoint    : {{ ansible_host }}:{{ wg_port }}"
           - "  Config Path : peers/admin.conf"
           - "  Dashboard   : http://{{ dashboard_bind_host }}:{{ dashboard_bind_port }}"
           - "  Token Cmd   : cat .secrets/dashboard_token"
           - ""
           - "  macOS GUI:"
-          - "    File → Import Tunnel → peers/admin.conf"
+          - "    Import peers/admin.conf with a {{ vpn_transport_label }}-compatible client"
           - ""
           - "  CLI:"
-          - "    sudo wg-quick up $(pwd)/../peers/admin.conf"
+          - "    sudo {{ 'awg-quick' if vpn_transport == 'amneziawg' else 'wg-quick' }} up $(pwd)/../peers/admin.conf"
           - ""
           - "══════════════════════════════════════════════════════════════"
           - ""

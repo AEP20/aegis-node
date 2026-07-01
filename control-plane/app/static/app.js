@@ -31,6 +31,14 @@ const API = {
   },
 };
 
+let activeTransport = {
+  transport: "wireguard",
+  transport_label: "WireGuard",
+  interface: "wg0",
+  endpoint: "",
+  server_ip: "10.66.66.1",
+};
+
 // ── Auth ─────────────────────────────────────────────────
 
 const loginScreen = document.getElementById("login-screen");
@@ -121,6 +129,8 @@ async function loadOverview() {
 }
 
 function renderHealth(d) {
+  activeTransport = { ...activeTransport, ...d };
+
   const vpnDot   = document.getElementById("vpn-dot");
   const vpnLabel = document.getElementById("vpn-label");
 
@@ -147,11 +157,13 @@ function renderHealth(d) {
   // static info from service env (best-effort)
   const endpointEl = document.getElementById("info-endpoint");
   const subnetEl   = document.getElementById("info-subnet");
-  if (endpointEl && endpointEl.textContent === "—") {
-    // these are injected via the systemd env; we just show placeholders
-    endpointEl.textContent = window.__AEGIS_ENDPOINT__ || "configured via env";
-    subnetEl.textContent   = window.__AEGIS_SUBNET__   || "10.66.66.0/24";
-  }
+  const interfaceEl = document.getElementById("info-interface");
+  const transportEl = document.getElementById("info-transport");
+  if (endpointEl) endpointEl.textContent = d.endpoint || "configured via env";
+  if (subnetEl) subnetEl.textContent = d.server_ip ? d.server_ip.replace(/\.\d+$/, ".0/24") : "10.66.66.0/24";
+  if (interfaceEl) interfaceEl.textContent = d.interface || "—";
+  if (transportEl) transportEl.textContent = d.transport_label || d.transport || "—";
+  updateProvisionCopy();
 }
 
 document.getElementById("refresh-btn").addEventListener("click", loadOverview);
@@ -293,7 +305,7 @@ function openLabelEdit(btn) {
 async function removePeer(pubkey) {
   if (!confirm("Remove peer?")) return;
   try {
-    await API.post("/api/wg/remove", { public_key: pubkey });
+    await API.post("/api/vpn/remove", { public_key: pubkey });
     loadPeers();
     loadOverview();
   } catch (e) {
@@ -320,7 +332,7 @@ addPeerForm.addEventListener("submit", async (e) => {
   }
 
   try {
-    const res = await API.post("/api/wg/add", { public_key: pk, allowed_ip: ip });
+    const res = await API.post("/api/vpn/add", { public_key: pk, allowed_ip: ip });
     if (res.status === "ok") {
       showMsg(addPeerMsg, "peer added", true);
       addPeerForm.reset();
@@ -344,6 +356,18 @@ function showMsg(el, text, ok) {
 const provisionBtn    = document.getElementById("provision-btn");
 const provisionResult = document.getElementById("provision-result");
 
+function updateProvisionCopy() {
+  const desc = document.getElementById("provision-desc");
+  const label = activeTransport.transport_label || "VPN";
+  if (desc) {
+    desc.textContent =
+      `Generates a fresh ${label} keypair, allocates the next available IP, ` +
+      "adds the peer to the live interface and config, then returns a client config and scan-ready QR code.";
+  }
+}
+
+updateProvisionCopy();
+
 provisionBtn.addEventListener("click", async () => {
   provisionBtn.textContent = "generating…";
   provisionBtn.disabled = true;
@@ -351,23 +375,23 @@ provisionBtn.addEventListener("click", async () => {
   provisionResult.classList.remove("visible");
 
   try {
-    const data = await API.post("/api/wg/provision", {});
+    const data = await API.post("/api/vpn/provision", {});
 
     document.getElementById("qr-img").src       = `data:image/png;base64,${data.qr}`;
     document.getElementById("config-pre").textContent = data.config;
     document.getElementById("peer-ip-label").textContent = data.allowed_ip;
     document.getElementById("provision-pk").textContent  = data.public_key;
 
-    // Generate bash magic script (extract server IP from browser url)
-    const serverHost = window.location.hostname;
-    const magicScript = 
-`sudo apt update && sudo apt install -y wireguard resolvconf && \\
-sudo sh -c "cat > /etc/wireguard/wg0.conf <<'EOF'
-${data.config}
-EOF" && \\
-sudo systemctl enable --now wg-quick@wg0`;
+    document.getElementById("script-pre").textContent = data.install_command || "";
 
-    document.getElementById("script-pre").textContent = magicScript;
+    const qrTip = document.getElementById("qr-tooltip");
+    const configTip = document.getElementById("config-tooltip");
+    if (qrTip && data.client_app) {
+      qrTip.dataset.tooltip = `Scan with ${data.client_app} to instantly add this peer`;
+    }
+    if (configTip && data.client_app) {
+      configTip.dataset.tooltip = `Download and import into ${data.client_app}`;
+    }
 
     provisionResult.classList.remove("hidden");
     provisionResult.classList.add("visible");

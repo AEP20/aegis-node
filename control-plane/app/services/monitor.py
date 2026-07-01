@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
+from app.services.wg import VPN_CLI, VPN_INTERFACE, VPN_SERVICE_NAME, VPN_TRANSPORT_LABEL
+
 try:
     import maxminddb
 except ImportError:
@@ -142,14 +144,12 @@ def _format_uptime(seconds: int) -> str:
 
 # ── Services ─────────────────────────────────────────────────
 
-WG_INTERFACE = os.getenv("WG_INTERFACE", "wg0")
-
 _SERVICES = [
-    {"name": f"wg-quick@{WG_INTERFACE}", "label": f"wireguard ({WG_INTERFACE})"},
-    {"name": "aegis-api",                 "label": "aegis api"},
-    {"name": "unbound",                   "label": "unbound dns"},
-    {"name": "ssh",                        "label": "openssh"},
-    {"name": "netfilter-persistent",       "label": "iptables persist"},
+    {"name": VPN_SERVICE_NAME,        "label": f"{VPN_TRANSPORT_LABEL.lower()} ({VPN_INTERFACE})"},
+    {"name": "aegis-api",            "label": "aegis api"},
+    {"name": "unbound",              "label": "unbound dns"},
+    {"name": "ssh",                  "label": "openssh"},
+    {"name": "netfilter-persistent", "label": "iptables persist"},
 ]
 
 def _service_status(name: str) -> str:
@@ -172,16 +172,16 @@ def get_services():
         for s in _SERVICES
     ]
 
-# ── WireGuard Traffic ────────────────────────────────────────
+# ── VPN Traffic ──────────────────────────────────────────────
 
 def get_wg_traffic():
     """
-    Output format of `sudo wg show all transfer`:
+    Output format of `sudo wg/awg show all transfer`:
     <interface> <pubkey> <rx_bytes> <tx_bytes>
     """
     try:
         output = subprocess.check_output(
-            ["sudo", "wg", "show", "all", "transfer"],
+            ["sudo", VPN_CLI, "show", "all", "transfer"],
             text=True
         ).strip()
     except Exception:
@@ -304,14 +304,14 @@ def get_performance_metrics():
     except Exception:
         pass
 
-    # WG0 Network Stats (Bytes & Drops)
+    # VPN interface network stats (Bytes & Drops)
     wg_rx, wg_tx = 0, 0
     wg_drop_rx, wg_drop_tx = 0, 0
     try:
-        with open(f"/sys/class/net/{WG_INTERFACE}/statistics/rx_bytes") as f: wg_rx = int(f.read())
-        with open(f"/sys/class/net/{WG_INTERFACE}/statistics/tx_bytes") as f: wg_tx = int(f.read())
-        with open(f"/sys/class/net/{WG_INTERFACE}/statistics/rx_dropped") as f: wg_drop_rx = int(f.read())
-        with open(f"/sys/class/net/{WG_INTERFACE}/statistics/tx_dropped") as f: wg_drop_tx = int(f.read())
+        with open(f"/sys/class/net/{VPN_INTERFACE}/statistics/rx_bytes") as f: wg_rx = int(f.read())
+        with open(f"/sys/class/net/{VPN_INTERFACE}/statistics/tx_bytes") as f: wg_tx = int(f.read())
+        with open(f"/sys/class/net/{VPN_INTERFACE}/statistics/rx_dropped") as f: wg_drop_rx = int(f.read())
+        with open(f"/sys/class/net/{VPN_INTERFACE}/statistics/tx_dropped") as f: wg_drop_tx = int(f.read())
     except Exception:
         pass
 
@@ -406,4 +406,3 @@ def get_ssh_timeline(tz_offset_minutes: int = 0):
                 })
 
     return list(day_index.values())
-

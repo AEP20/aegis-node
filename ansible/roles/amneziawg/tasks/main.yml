@@ -1,0 +1,246 @@
+# roles/amneziawg/tasks/main.yml
+
+- name: Ensure AmneziaWG obfuscation defaults are resolved
+  set_fact:
+    amneziawg_obfuscation_preset: "{{ amneziawg_obfuscation_preset | default('balanced') }}"
+    amneziawg_obfuscation: >-
+      {{
+        amneziawg_obfuscation
+        | default(
+            amneziawg_obfuscation_presets[amneziawg_obfuscation_preset | default('balanced')]
+            | combine(amneziawg_obfuscation_overrides | default({}), recursive=True)
+          )
+      }}
+
+- name: Install AmneziaWG prerequisites
+  apt:
+    name:
+      - software-properties-common
+      - python3-launchpadlib
+      - gnupg2
+      - "linux-headers-{{ ansible_kernel }}"
+      - iptables
+      - iptables-persistent
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Add AmneziaWG PPA
+  apt_repository:
+    repo: "{{ amneziawg_apt_ppa }}"
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Install AmneziaWG package
+  apt:
+    name: "{{ amneziawg_package_name }}"
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Load AmneziaWG kernel module
+  modprobe:
+    name: amneziawg
+    state: present
+  become: true
+
+- name: Enable IPv4 forwarding (runtime)
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Allow services to bind to non-local IPs (prevents resolver crash on VPN restart)
+  sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: "1"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  become: true
+
+- name: Show detected default interface
+  debug:
+    var: ansible_facts["default_ipv4"]["interface"]
+
+- name: Ensure exactly one MASQUERADE rule (remove all, re-add once)
+  shell:
+    cmd: |
+      IFACE="{{ ansible_facts['default_ipv4']['interface'] }}"
+      SOURCE="{{ wg_subnet_cidr }}"
+      while iptables -t nat -C POSTROUTING \
+            -s "$SOURCE" -o "$IFACE" -j MASQUERADE 2>/dev/null; do
+        iptables -t nat -D POSTROUTING \
+                 -s "$SOURCE" -o "$IFACE" -j MASQUERADE
+      done
+      iptables -t nat -A POSTROUTING \
+               -s "$SOURCE" -o "$IFACE" \
+               -m comment --comment "Aegis VPN NAT" \
+               -j MASQUERADE
+  become: true
+  changed_when: true
+  notify: Save iptables rules
+
+- name: Allow established traffic back
+  iptables:
+    chain: FORWARD
+    match: state
+    ctstate: ESTABLISHED,RELATED
+    jump: ACCEPT
+    state: present
+  become: true
+  notify: Save iptables rules
+
+- name: Allow forwarding from VPN subnet
+  iptables:
+    chain: FORWARD
+    source: "{{ wg_subnet_cidr }}"
+    jump: ACCEPT
+    state: present
+  become: true
+  notify: Save iptables rules
+
+- name: Ensure AmneziaWG config directory exists
+  file:
+    path: "{{ amneziawg_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  become: true
+
+- name: Check if AmneziaWG private key exists
+  stat:
+    path: "{{ wg_private_key_path }}"
+  register: amneziawg_private_key_stat
+  become: true
+
+- name: Generate AmneziaWG private key
+  command: awg genkey
+  register: amneziawg_private_key
+  when: not amneziawg_private_key_stat.stat.exists
+  become: true
+  changed_when: false
+
+- name: Save AmneziaWG private key
+  copy:
+    content: "{{ amneziawg_private_key.stdout }}"
+    dest: "{{ wg_private_key_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: not amneziawg_private_key_stat.stat.exists
+  become: true
+
+- name: Generate AmneziaWG public key
+  shell: "awg pubkey < {{ wg_private_key_path }}"
+  register: amneziawg_public_key
+  become: true
+  changed_when: false
+
+- name: Read AmneziaWG private key
+  slurp:
+    src: "{{ wg_private_key_path }}"
+  register: wg_private_key_file
+  become: true
+
+- name: Save AmneziaWG public key
+  copy:
+    content: "{{ amneziawg_public_key.stdout }}"
+    dest: "{{ wg_public_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Restore quarantined AmneziaWG config if present
+  command: >
+    mv {{ wg_config_path }}{{ vpn_inactive_config_suffix }}
+    {{ wg_config_path }}
+  args:
+    creates: "{{ wg_config_path }}"
+    removes: "{{ wg_config_path }}{{ vpn_inactive_config_suffix }}"
+  become: true
+
+- name: Create AmneziaWG configuration file
+  template:
+    src: awg0.conf.j2
+    dest: "{{ wg_config_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  become: true
+  notify: Restart AmneziaWG
+
+- name: Ensure AmneziaWG interface address is current
+  lineinfile:
+    path: "{{ wg_config_path }}"
+    regexp: '^Address\s*='
+    insertafter: '^\[Interface\]'
+    line: "Address = {{ wg_server_address }}"
+  become: true
+  notify: Restart AmneziaWG
+
+- name: Ensure AmneziaWG listen port is current
+  lineinfile:
+    path: "{{ wg_config_path }}"
+    regexp: '^ListenPort\s*='
+    insertafter: '^Address\s*='
+    line: "ListenPort = {{ wg_port }}"
+  become: true
+  notify: Restart AmneziaWG
+
+- name: Ensure AmneziaWG obfuscation parameters are current
+  lineinfile:
+    path: "{{ wg_config_path }}"
+    regexp: '^{{ item.key }}\s*='
+    insertafter: '^PrivateKey\s*='
+    line: "{{ item.key }} = {{ item.value }}"
+  loop:
+    - { key: Jc, value: "{{ amneziawg_obfuscation.jc }}" }
+    - { key: Jmin, value: "{{ amneziawg_obfuscation.jmin }}" }
+    - { key: Jmax, value: "{{ amneziawg_obfuscation.jmax }}" }
+    - { key: S1, value: "{{ amneziawg_obfuscation.s1 }}" }
+    - { key: S2, value: "{{ amneziawg_obfuscation.s2 }}" }
+    - { key: H1, value: "{{ amneziawg_obfuscation.h1 }}" }
+    - { key: H2, value: "{{ amneziawg_obfuscation.h2 }}" }
+    - { key: H3, value: "{{ amneziawg_obfuscation.h3 }}" }
+    - { key: H4, value: "{{ amneziawg_obfuscation.h4 }}" }
+  become: true
+  notify: Restart AmneziaWG
+
+- name: Check if inactive WireGuard config exists
+  stat:
+    path: "{{ amneziawg_inactive_wireguard_config }}"
+  register: inactive_wireguard_config_stat
+  become: true
+
+- name: Stop and disable inactive WireGuard service
+  systemd:
+    name: "{{ amneziawg_inactive_wireguard_service }}"
+    enabled: false
+    state: stopped
+  become: true
+  failed_when: false
+
+- name: Enable and start AmneziaWG interface
+  systemd:
+    name: "{{ vpn_service_name }}"
+    enabled: true
+    state: started
+  become: true
+
+- name: Quarantine inactive WireGuard config
+  command: >
+    mv {{ amneziawg_inactive_wireguard_config }}
+    {{ amneziawg_inactive_wireguard_backup }}
+  args:
+    creates: "{{ amneziawg_inactive_wireguard_backup }}"
+    removes: "{{ amneziawg_inactive_wireguard_config }}"
+  become: true
+  when: inactive_wireguard_config_stat.stat.exists

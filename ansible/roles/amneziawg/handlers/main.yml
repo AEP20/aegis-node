@@ -1,6 +1,4 @@
-# roles/wireguard/handlers/main.yml
-
-- name: Restart WireGuard
+- name: Restart AmneziaWG
   systemd:
     name: "{{ vpn_service_name }}"
     state: restarted

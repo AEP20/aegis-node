@@ -11,18 +11,49 @@ import os
 
 from app.services.constants import HANDSHAKE_ACTIVE_THRESHOLD
 
-WG_INTERFACE              = os.getenv("WG_INTERFACE", "wg0")
-WG_SUBNET_BASE            = os.getenv("WG_SUBNET_BASE")          # e.g. "10.66.66."
-WG_ENDPOINT               = os.getenv("WG_ENDPOINT")             # e.g. "1.2.3.4:51820"
-WG_SERVER_PUBLIC_KEY_PATH = os.getenv(
-    "WG_SERVER_PUBLIC_KEY_PATH", "/etc/wireguard/server_public.key"
+VPN_TRANSPORT = os.getenv("VPN_TRANSPORT", "wireguard").strip().lower()
+VPN_TRANSPORT_LABEL = os.getenv(
+    "VPN_TRANSPORT_LABEL",
+    "AmneziaWG" if VPN_TRANSPORT == "amneziawg" else "WireGuard",
 )
-WG_CONFIG_PATH  = f"/etc/wireguard/{WG_INTERFACE}.conf"
+VPN_CLI = os.getenv("VPN_CLI", "awg" if VPN_TRANSPORT == "amneziawg" else "wg")
+VPN_INTERFACE = os.getenv("VPN_INTERFACE") or os.getenv("WG_INTERFACE", "wg0")
+VPN_SUBNET_BASE = os.getenv("VPN_SUBNET_BASE") or os.getenv("WG_SUBNET_BASE")
+VPN_ENDPOINT = os.getenv("VPN_ENDPOINT") or os.getenv("WG_ENDPOINT")
+VPN_SERVER_IP = os.getenv("VPN_SERVER_IP") or (
+    f"{VPN_SUBNET_BASE}1" if VPN_SUBNET_BASE else "10.66.66.1"
+)
+VPN_SERVICE_NAME = os.getenv(
+    "VPN_SERVICE_NAME",
+    f"awg-quick@{VPN_INTERFACE}" if VPN_TRANSPORT == "amneziawg" else f"wg-quick@{VPN_INTERFACE}",
+)
+
+VPN_SERVER_PUBLIC_KEY_PATH = os.getenv("VPN_SERVER_PUBLIC_KEY_PATH") or os.getenv(
+    "WG_SERVER_PUBLIC_KEY_PATH",
+    "/etc/amnezia/amneziawg/server_public.key"
+    if VPN_TRANSPORT == "amneziawg"
+    else "/etc/wireguard/server_public.key",
+)
+VPN_CONFIG_PATH = os.getenv("VPN_CONFIG_PATH") or os.getenv(
+    "WG_CONFIG_PATH",
+    f"/etc/amnezia/amneziawg/{VPN_INTERFACE}.conf"
+    if VPN_TRANSPORT == "amneziawg"
+    else f"/etc/wireguard/{VPN_INTERFACE}.conf",
+)
 
 # Admin peer IP: subnet base + .2 (static IP assigned during bootstrap)
 ADMIN_PEER_IP = os.getenv("ADMIN_PEER_IP") or (
-    (WG_SUBNET_BASE + "2") if WG_SUBNET_BASE else "10.66.66.2"
+    (VPN_SUBNET_BASE + "2") if VPN_SUBNET_BASE else "10.66.66.2"
 )
+
+# Backward-compatible names imported by older modules/tests.
+WG_INTERFACE = VPN_INTERFACE
+WG_SUBNET_BASE = VPN_SUBNET_BASE
+WG_ENDPOINT = VPN_ENDPOINT
+WG_SERVER_PUBLIC_KEY_PATH = VPN_SERVER_PUBLIC_KEY_PATH
+WG_CONFIG_PATH = VPN_CONFIG_PATH
+
+AMNEZIAWG_KEYS = ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4")
 
 
 # ── Helpers ────────────────────────────────────────────────
@@ -37,7 +68,7 @@ def get_wg_dump_cached(ttl=2) -> str:
 
     try:
         output = subprocess.check_output(
-            ["sudo", "wg", "show", "all", "dump"],
+            ["sudo", VPN_CLI, "show", "all", "dump"],
             text=True
         )
         _dump_cache = {"output": output, "timestamp": now}
@@ -57,11 +88,11 @@ def _format_age(seconds):
 
 
 def _persist_peer(public_key: str, allowed_ip: str):
-    """Appends a [Peer] block to wg*.conf (via sudo tee -a)."""
+    """Appends a [Peer] block to the active VPN backend config."""
     entry = f"\n[Peer]\nPublicKey = {public_key}\nAllowedIPs = {allowed_ip}\n"
 
     subprocess.run(
-        ["sudo", "tee", "-a", WG_CONFIG_PATH],
+        ["sudo", "tee", "-a", VPN_CONFIG_PATH],
         input=entry,
         text=True,
         check=True,
@@ -71,12 +102,12 @@ def _persist_peer(public_key: str, allowed_ip: str):
 
 def _remove_from_config(public_key: str):
     """
-    Removes the matching [Peer] block from wg*.conf.
+    Removes the matching [Peer] block from the active backend config.
     Deletes from the [Peer] section header to the next section header
     or EOF if the public_key matches.
     """
     try:
-        with open(WG_CONFIG_PATH, "r") as f:
+        with open(VPN_CONFIG_PATH, "r") as f:
             content = f.read()
     except OSError:
         return
@@ -96,7 +127,7 @@ def _remove_from_config(public_key: str):
 
     # write with sudo tee (file owned by root)
     subprocess.check_call(
-        ["sudo", "tee", WG_CONFIG_PATH],
+        ["sudo", "tee", VPN_CONFIG_PATH],
         input=new_content,
         text=True,
         stdout=subprocess.DEVNULL,
@@ -104,6 +135,18 @@ def _remove_from_config(public_key: str):
 
 
 # ── Public API ─────────────────────────────────────────────
+
+def get_transport_info():
+    return {
+        "transport": VPN_TRANSPORT,
+        "transport_label": VPN_TRANSPORT_LABEL,
+        "interface": VPN_INTERFACE,
+        "cli": VPN_CLI,
+        "endpoint": VPN_ENDPOINT,
+        "config_path": VPN_CONFIG_PATH,
+        "service_name": VPN_SERVICE_NAME,
+        "server_ip": VPN_SERVER_IP,
+    }
 
 def get_peers():
     output = get_wg_dump_cached()
@@ -152,7 +195,7 @@ def get_peers():
 def add_peer(public_key: str, allowed_ip: str):
     try:
         subprocess.check_call([
-            "sudo", "wg", "set", WG_INTERFACE,
+            "sudo", VPN_CLI, "set", VPN_INTERFACE,
             "peer", public_key,
             "allowed-ips", allowed_ip,
         ])
@@ -165,7 +208,7 @@ def add_peer(public_key: str, allowed_ip: str):
 def remove_peer(public_key: str):
     try:
         subprocess.check_call([
-            "sudo", "wg", "set", WG_INTERFACE,
+            "sudo", VPN_CLI, "set", VPN_INTERFACE,
             "peer", public_key,
             "remove",
         ])
@@ -176,25 +219,104 @@ def remove_peer(public_key: str):
 
 
 def _allocate_ip() -> str:
-    if not WG_SUBNET_BASE:
-        raise RuntimeError("WG_SUBNET_BASE environment variable not set")
+    if not VPN_SUBNET_BASE:
+        raise RuntimeError("VPN_SUBNET_BASE environment variable not set")
 
     peers = get_peers()["peers"]
     used  = {p["allowed_ips"].split("/")[0] for p in peers}
 
     for i in range(10, 200):
-        candidate = f"{WG_SUBNET_BASE}{i}"
+        candidate = f"{VPN_SUBNET_BASE}{i}"
         if candidate not in used:
             return f"{candidate}/32"
 
     raise RuntimeError("No available IP in subnet range (.10–.199)")
 
 
+def _read_amneziawg_params_from_config() -> dict:
+    params = {}
+    try:
+        with open(VPN_CONFIG_PATH, "r") as f:
+            for line in f:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                if key in AMNEZIAWG_KEYS:
+                    params[key] = value.strip()
+    except OSError:
+        pass
+    return params
+
+
+def _amneziawg_params() -> dict:
+    params = {}
+    for key in AMNEZIAWG_KEYS:
+        env_key = f"AMNEZIAWG_{key.upper()}"
+        value = os.getenv(env_key)
+        if value not in (None, ""):
+            params[key] = value
+
+    if len(params) < len(AMNEZIAWG_KEYS):
+        params.update({k: v for k, v in _read_amneziawg_params_from_config().items() if k not in params})
+
+    return params
+
+
+def _client_config(private_key: str, allowed_ip: str, server_pub: str) -> str:
+    dns_ip = VPN_SERVER_IP
+    interface_lines = [
+        "[Interface]",
+        f"PrivateKey = {private_key}",
+        f"Address = {allowed_ip}",
+        f"DNS = {dns_ip}",
+    ]
+
+    if VPN_TRANSPORT == "amneziawg":
+        params = _amneziawg_params()
+        for key in AMNEZIAWG_KEYS:
+            if key in params:
+                interface_lines.append(f"{key} = {params[key]}")
+
+    peer_lines = [
+        "",
+        "[Peer]",
+        f"PublicKey = {server_pub}",
+        f"Endpoint = {VPN_ENDPOINT}",
+        "AllowedIPs = 0.0.0.0/0",
+        "PersistentKeepalive = 25",
+    ]
+
+    return "\n".join(interface_lines + peer_lines)
+
+
+def _linux_install_command(config: str) -> str:
+    if VPN_TRANSPORT == "amneziawg":
+        config_path = f"/etc/amnezia/amneziawg/{VPN_INTERFACE}.conf"
+        return (
+            "sudo apt update && sudo apt install -y software-properties-common && \\\n"
+            "sudo add-apt-repository -y ppa:amnezia/ppa && \\\n"
+            "sudo apt update && sudo apt install -y amneziawg && \\\n"
+            "sudo mkdir -p /etc/amnezia/amneziawg && \\\n"
+            f"sudo sh -c \"cat > {config_path} <<'EOF'\n"
+            f"{config}\n"
+            "EOF\" && \\\n"
+            f"sudo systemctl enable --now awg-quick@{VPN_INTERFACE}"
+        )
+
+    config_path = f"/etc/wireguard/{VPN_INTERFACE}.conf"
+    return (
+        "sudo apt update && sudo apt install -y wireguard resolvconf && \\\n"
+        f"sudo sh -c \"cat > {config_path} <<'EOF'\n"
+        f"{config}\n"
+        "EOF\" && \\\n"
+        f"sudo systemctl enable --now wg-quick@{VPN_INTERFACE}"
+    )
+
+
 def provision_peer():
     # 1. Generate keypair
-    private_key = subprocess.check_output(["wg", "genkey"], text=True).strip()
+    private_key = subprocess.check_output([VPN_CLI, "genkey"], text=True).strip()
     public_key  = subprocess.check_output(
-        ["wg", "pubkey"], input=private_key, text=True
+        [VPN_CLI, "pubkey"], input=private_key, text=True
     ).strip()
 
     # 2. Allocate IP
@@ -202,7 +324,7 @@ def provision_peer():
 
     # 3. Add to live interface
     subprocess.check_call([
-        "sudo", "wg", "set", WG_INTERFACE,
+        "sudo", VPN_CLI, "set", VPN_INTERFACE,
         "peer", public_key,
         "allowed-ips", allowed_ip,
     ])
@@ -211,24 +333,11 @@ def provision_peer():
     _persist_peer(public_key, allowed_ip)
 
     # 5. Read server public key
-    with open(WG_SERVER_PUBLIC_KEY_PATH) as f:
+    with open(VPN_SERVER_PUBLIC_KEY_PATH) as f:
         server_pub = f.read().strip()
 
     # 6. Build client config
-    # DNS = first host in subnet (WG_SUBNET_BASE + "1")
-    dns_ip = f"{WG_SUBNET_BASE}1" if WG_SUBNET_BASE else "10.66.66.1"
-    config = (
-        f"[Interface]\n"
-        f"PrivateKey = {private_key}\n"
-        f"Address = {allowed_ip}\n"
-        f"DNS = {dns_ip}\n"
-        f"\n"
-        f"[Peer]\n"
-        f"PublicKey = {server_pub}\n"
-        f"Endpoint = {WG_ENDPOINT}\n"
-        f"AllowedIPs = 0.0.0.0/0\n"
-        f"PersistentKeepalive = 25"
-    )
+    config = _client_config(private_key, allowed_ip, server_pub)
 
     # 7. Generate QR code
     img = qrcode.make(config)
@@ -241,4 +350,10 @@ def provision_peer():
         "allowed_ip": allowed_ip,
         "config":     config,
         "qr":         qr_base64,
+        "transport":  VPN_TRANSPORT,
+        "transport_label": VPN_TRANSPORT_LABEL,
+        "interface":  VPN_INTERFACE,
+        "endpoint":   VPN_ENDPOINT,
+        "client_app": "AmneziaWG / Amnezia VPN" if VPN_TRANSPORT == "amneziawg" else "WireGuard",
+        "install_command": _linux_install_command(config),
     }

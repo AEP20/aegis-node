@@ -2,13 +2,13 @@
 
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%2022.04%2B-blue?style=flat-square)
 ![Ansible](https://img.shields.io/badge/provisioned%20with-Ansible-red?style=flat-square&logo=ansible)
-![WireGuard](https://img.shields.io/badge/VPN-WireGuard-88171A?style=flat-square&logo=wireguard)
+![VPN](https://img.shields.io/badge/VPN-WireGuard%20%2B%20AmneziaWG-88171A?style=flat-square&logo=wireguard)
 ![Python](https://img.shields.io/badge/control--plane-FastAPI-009688?style=flat-square&logo=fastapi)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 > Production-minded, minimal-attack-surface VPN infrastructure for self-hosted operators.
 
-A self-hosted WireGuard VPN server with a token-authenticated REST API and a lightweight web dashboard — fully provisioned via Ansible.
+A self-hosted VPN gateway with a token-authenticated REST API and a lightweight web dashboard — fully provisioned via Ansible. WireGuard is the default backend; AmneziaWG can be selected for mobile or DPI-hostile networks.
 
 Designed as an **Infrastructure Security & Network Engineering** project: opinionated, reproducible, and built for a single operator or a small team.
 
@@ -20,50 +20,50 @@ Designed as an **Infrastructure Security & Network Engineering** project: opinio
 
 `aegis-node` is not a hosted VPN service.
 
-It is an infrastructure-as-code blueprint that transforms a vanilla Ubuntu VPS into a hardened, self-operated WireGuard gateway — including firewall policy, DNS resolver, and a private control-plane API.
+It is an infrastructure-as-code blueprint that transforms a vanilla Ubuntu VPS into a hardened, self-operated VPN gateway — including firewall policy, DNS resolver, and a private control-plane API.
 
 You bring the VPS.
 The playbook brings the security model.
 
 ## What it does
 
-- **Provisions a hardened VPS** from scratch: WireGuard, firewall (iptables), SSH hardening, Unbound DNS, sysctl tuning — all idempotent Ansible roles.
+- **Provisions a hardened VPS** from scratch: VPN backend, firewall (iptables), SSH hardening, Unbound DNS, sysctl tuning — all idempotent Ansible roles.
 - **Runs a control-plane API** (FastAPI) on the VPN interface only — not exposed to the public internet.
-- **Manages WireGuard peers** via API: add, remove, or provision new peers with auto-assigned IPs and QR-code config generation.
-- **Monitors the node** in real time: CPU, memory, disk, uptime, WireGuard traffic per peer, and SSH event log with geo-IP enrichment.
+- **Manages VPN peers** via API: add, remove, or provision new peers with auto-assigned IPs and QR-code config generation.
+- **Monitors the node** in real time: CPU, memory, disk, uptime, VPN traffic per peer, and SSH event log with geo-IP enrichment.
 - **Bootstraps the admin peer** locally — private key never leaves your machine.
 
 ## Architecture
 
 `aegis-node` runs as a single Ubuntu VPS acting as a hardened VPN gateway with strict separation between:
 
-- **Data Plane** — encrypted peer traffic (WireGuard)
+- **Data Plane** — encrypted peer traffic (WireGuard or AmneziaWG)
 - **Control Plane** — peer management & monitoring API
 
 ### Network Model
 
 **Public interface (`eth0`)**
-- `UDP 51820` — WireGuard
+- `UDP 4500` — selected VPN backend
 - `TCP 22` — SSH (hardened)
 
 No HTTP services are publicly exposed.
 
-**Private interface (`wg0` – 10.66.66.0/24)**
+**Private interface (`wg0` or `awg0` – 10.66.66.0/24)**
 - FastAPI control-plane (`:8000`)
 - Unbound DNS
 - Internal monitoring endpoints
 
-The control-plane API is bound exclusively to `wg0` and is not reachable from the public internet.
+The control-plane API is bound exclusively to the private VPN address and is not reachable from the public internet.
 
 Access requires:
-- An active WireGuard session
+- An active VPN session
 - A valid `X-Aegis-Token`
 
 ### Traffic Flow
 
 ```
-Peer → WireGuard (UDP 51820) → wg0 → iptables (NAT + kill-switch) → Internet
-                                  └──→ aegis-api (:8000, wg0 only)
+Peer → selected VPN backend (UDP 4500) → wg0/awg0 → iptables (NAT + kill-switch) → Internet
+                                                 └──→ aegis-api (:8000, VPN only)
 ```
 
 ## Scope
@@ -77,7 +77,7 @@ Peer → WireGuard (UDP 51820) → wg0 → iptables (NAT + kill-switch) → Inte
 ### Out of scope
 - **Anonymity guarantees** — your VPS provider can still observe metadata; this is not a commercial VPN
 - **Multi-region / high availability** — single node by design
-- **Traffic obfuscation** — no steganography or censorship-bypass transport
+- **Advanced censorship bypass guarantees** — optional AmneziaWG transport can help with DPI-hostile networks, but no bypass guarantee is claimed
 - **End-user client management** — no GUI client, no billing, no accounts
 
 ### Dedicated VPS required
@@ -88,12 +88,12 @@ Peer → WireGuard (UDP 51820) → wg0 → iptables (NAT + kill-switch) → Inte
 
 | Threat | Mitigation |
 |---|---|
-| ISP / local network eavesdropping | All traffic encrypted via WireGuard (ChaCha20-Poly1305) |
-| DNS leaks | Unbound resolver on VPN interface; client DNS points to `wg0` |
+| ISP / local network eavesdropping | All traffic encrypted by the selected VPN backend |
+| DNS leaks | Unbound resolver on VPN interface; client DNS points to `wg_server_ip` |
 | IPv6 leaks | IPv6 disabled at kernel level (`wg_enable_ipv6: false`) |
-| VPN dropout exposing traffic | iptables default-DROP policy; only WireGuard endpoint exempt |
+| VPN dropout exposing traffic | iptables default-DROP policy; only selected VPN endpoint exempt |
 | SSH brute-force | Key-only auth, root login disabled, fail2ban, rate-limited firewall rule |
-| Unauthorized API access | Control-plane bound to `wg0` only; token auth on all endpoints |
+| Unauthorized API access | Control-plane bound to the VPN address only; token auth on all endpoints |
 | Rogue peer traffic | Per-peer `AllowedIPs = /32`; no peer-to-peer routing |
 | Key compromise | Admin private key stays local; peer revocation via API |
 
@@ -110,6 +110,7 @@ aegis-node/
 │   ├── roles/
 │   │   ├── system/              # user, packages, sysctl
 │   │   ├── wireguard/           # wg install, key gen, wg0.conf
+│   │   ├── amneziawg/           # awg install, key gen, awg0.conf
 │   │   ├── dns/                 # Unbound resolver
 │   │   ├── firewall/            # iptables rules + NAT
 │   │   ├── hardening/           # SSH, fail2ban, unattended-upgrades
@@ -120,7 +121,7 @@ aegis-node/
     │   ├── main.py              # FastAPI routes
     │   ├── auth.py              # token auth middleware
     │   └── services/
-    │       ├── wg.py            # peer CRUD + cached wg dump
+    │       ├── wg.py            # peer CRUD + active backend adapter
     │       ├── health.py        # VPN health endpoint
     │       ├── monitor.py       # system stats + SSH timeline
     │       └── labels.py        # peer label / metadata store
@@ -156,8 +157,9 @@ Edit `ansible/group_vars/all.yml` — the most important ones:
 
 | Variable | Default | Description |
 |---|---|---|
+| `vpn_transport` | `wireguard` | Active VPN backend (`wireguard` or `amneziawg`) |
 | `wg_subnet_cidr` | `10.66.66.0/24` | VPN subnet |
-| `wg_port` | `51820` | WireGuard UDP port |
+| `wg_port` | `4500` | Active backend UDP port |
 | `wg_bootstrap_admin` | `true` | Auto-add your local machine as admin peer |
 | `dashboard_bind_port` | `8000` | Control-plane API port |
 | `dns_enable` | `true` | Deploy Unbound resolver on the VPS |
@@ -169,13 +171,31 @@ cd ansible
 ansible-playbook playbook-wireguard.yml
 ```
 
+The playbook asks which VPN backend to deploy:
+
+```text
+VPN transport [wireguard/amneziawg] [wireguard]:
+```
+
 On first run this will:
 - Harden the VPS (SSH, firewall, sysctl)
-- Install and configure WireGuard
+- Install and configure the selected VPN backend
 - Deploy the control-plane as a systemd service
 - If `wg_bootstrap_admin: true`, generate a local keypair, register it as a peer, and write `peers/admin.conf`
 
+For non-interactive runs, pass the selection as an extra var:
+
+```bash
+ansible-playbook playbook-wireguard.yml -e vpn_transport=amneziawg
+```
+
+The playbook prompts for a small AmneziaWG obfuscation preset unless `amneziawg_obfuscation_preset` is supplied. Supported presets are `balanced`, `carrier`, and `quiet`.
+
+Switching `vpn_transport` later converges the server to the selected backend, but existing client profiles should be treated as stale. Reprovision and re-import clients from the dashboard after switching between `wireguard` and `amneziawg`.
+
 ### 4. Connect
+
+The local `peers/admin.conf` bootstrap profile is generated for the selected backend. Import it with WireGuard when `vpn_transport=wireguard`, or with an AmneziaWG-compatible client when `vpn_transport=amneziawg`.
 
 ```bash
 # macOS WireGuard app
@@ -201,11 +221,12 @@ All endpoints require the `X-Aegis-Token` header.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | WireGuard up/down, peer counts |
+| GET | `/api/health` | VPN up/down, active transport, peer counts |
 | GET | `/api/peers` | All peers with labels and handshake age |
-| POST | `/api/wg/add` | Add a peer by public key + IP |
-| POST | `/api/wg/remove` | Remove a peer by public key |
-| POST | `/api/wg/provision` | Auto-generate keypair + config + QR code |
+| POST | `/api/vpn/add` | Add a peer by public key + IP |
+| POST | `/api/vpn/remove` | Remove a peer by public key |
+| POST | `/api/vpn/provision` | Auto-generate keypair + backend-matched config + QR code |
+| POST | `/api/wg/*` | Compatibility aliases for existing clients/scripts |
 | GET | `/api/monitor/system` | CPU, memory, disk, uptime |
 | GET | `/api/monitor/services` | systemd service statuses |
 | GET | `/api/monitor/traffic` | Per-peer bytes transferred |
@@ -230,6 +251,7 @@ After changing `control-plane/` without wanting to re-run the full playbook:
 - Private keys are never sent to the VPS. The admin peer private key stays on your local machine.
 - `peers/` and `ansible/.secrets/` are excluded from version control via `.gitignore`.
 - For production use, consider encrypting `dashboard_auth_token` with `ansible-vault`.
+- Dashboard peer provisioning generates client profiles for the active backend. Standard WireGuard clients cannot import AmneziaWG profiles; use an AmneziaWG-compatible client when `vpn_transport=amneziawg`.
 
 ## Roadmap
 

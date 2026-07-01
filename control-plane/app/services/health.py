@@ -4,17 +4,19 @@ import subprocess
 import time
 
 from app.services.constants import HANDSHAKE_ACTIVE_THRESHOLD
-from app.services.wg import get_wg_dump_cached
+from app.services.wg import get_transport_info, get_wg_dump_cached
 
 
 def get_health():
     dump = get_wg_dump_cached()
+    transport = get_transport_info()
 
     if not dump:
         return {
             "vpn_up": False,
             "peers_total": 0,
             "peers_active": 0,
+            **transport,
             "timestamp": int(time.time())
         }
 
@@ -26,6 +28,7 @@ def get_health():
             "vpn_up": True,
             "peers_total": 0,
             "peers_active": 0,
+            **transport,
             "timestamp": int(time.time())
         }
 
@@ -52,5 +55,6 @@ def get_health():
         "vpn_up": True,
         "peers_total": peers_total,
         "peers_active": peers_active,
+        **transport,
         "timestamp": now
     }

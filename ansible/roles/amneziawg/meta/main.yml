@@ -1,0 +1,6 @@
+---
+galaxy_info:
+  role_name: amneziawg
+  description: Install and configure AmneziaWG transport backend
+  license: MIT
+  min_ansible_version: "2.14"

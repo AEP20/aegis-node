@@ -34,7 +34,7 @@ if os.path.isdir(STATIC_DIR):
 
 def _validate_pubkey(v: str) -> str:
     if len(v) != 44 or not re.match(r"^[A-Za-z0-9+/]{43}=$", v):
-        raise ValueError("Invalid WireGuard public key format")
+        raise ValueError("Invalid VPN public key format")
     return v
 
 def _validate_cidr(v: str) -> str:
@@ -105,6 +105,7 @@ def peers():
 
 
 @app.post("/api/wg/add", dependencies=[Depends(verify_token)])
+@app.post("/api/vpn/add", dependencies=[Depends(verify_token)])
 def add_peer_endpoint(data: AddPeerRequest):
     result = add_peer(data.public_key, data.allowed_ip)
     if result.get("status") == "error":
@@ -114,6 +115,7 @@ def add_peer_endpoint(data: AddPeerRequest):
 
 
 @app.post("/api/wg/remove", dependencies=[Depends(verify_token)])
+@app.post("/api/vpn/remove", dependencies=[Depends(verify_token)])
 def remove_peer_endpoint(data: RemovePeerRequest):
     result = remove_peer(data.public_key)
     if result.get("status") == "error":
@@ -122,6 +124,7 @@ def remove_peer_endpoint(data: RemovePeerRequest):
 
 
 @app.post("/api/wg/provision", dependencies=[Depends(verify_token)])
+@app.post("/api/vpn/provision", dependencies=[Depends(verify_token)])
 def provision():
     data = provision_peer()
     if "public_key" in data:
@@ -212,4 +215,3 @@ def system_reboot_cancel():
         return {"status": "ok", "message": "Scheduled reboot cancelled."}
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"shutdown -c failed: {e}")
-
