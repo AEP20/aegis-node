@@ -405,4 +405,80 @@ def get_ssh_timeline(tz_offset_minutes: int = 0):
                     "time": local_time,   # local time -> correct position on axis
                 })
 
+
+# ── fail2ban ──────────────────────────────────────────────────
+
+_F2B_JAIL_RE  = re.compile(r'\[(\w+)\]')
+_F2B_BAN_RE   = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ .*\[(\w+)\] Ban ([\d.a-fA-F:]+)')
+
+
+def _f2b_jail_stats(jail: str) -> dict:
+    """fail2ban-client status <jail> çıktısını parse eder."""
+    stats = {"currently_banned": 0, "total_banned": 0, "total_failed": 0}
+    try:
+        out = subprocess.check_output(
+            ["sudo", "fail2ban-client", "status", jail],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        for line in out.splitlines():
+            line = line.strip()
+            if "Currently banned:" in line:
+                stats["currently_banned"] = int(line.rsplit(":", 1)[-1].strip())
+            elif "Total banned:" in line:
+                stats["total_banned"] = int(line.rsplit(":", 1)[-1].strip())
+            elif "Total failed:" in line:
+                stats["total_failed"] = int(line.rsplit(":", 1)[-1].strip())
+    except Exception:
+        pass
+    return stats
+
+
+def get_fail2ban_status() -> dict:
+    result = {
+        "available":       False,
+        "currently_banned": 0,
+        "total_banned":    0,
+        "total_failed":    0,
+        "recent_bans":     [],
+    }
+
+    # Birincil jail: sshd
+    sshd = _f2b_jail_stats("sshd")
+    if sshd["total_banned"] > 0 or sshd["currently_banned"] >= 0:
+        result["available"]        = True
+        result["currently_banned"] += sshd["currently_banned"]
+        result["total_banned"]     += sshd["total_banned"]
+        result["total_failed"]     += sshd["total_failed"]
+
+    # Recidive jail (varsa eklenir, yoksa sessizce atlanır)
+    recidive = _f2b_jail_stats("recidive")
+    result["currently_banned"] += recidive["currently_banned"]
+    result["total_banned"]     += recidive["total_banned"]
+
+    # Son banları logdan oku (tail sudoers'da mevcut)
+    try:
+        raw = subprocess.check_output(
+            ["sudo", "tail", "-n", "2000", "/var/log/fail2ban.log"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        bans = []
+        for line in raw.splitlines():
+            if " Ban " not in line or "Unban" in line:
+                continue
+            m = _F2B_BAN_RE.search(line)
+            if m:
+                bans.append({
+                    "timestamp": m.group(1),
+                    "jail":      m.group(2),
+                    "ip":        m.group(3),
+                    "geo":       get_geo_info(m.group(3)),
+                })
+        result["recent_bans"] = bans[-5:][::-1]   # son 5, en yeni başta
+        if bans:
+            result["available"] = True
+    except Exception:
+        pass
+
+    return result
+
     return list(day_index.values())

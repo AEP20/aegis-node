@@ -1,0 +1,37 @@
+# Managed by Ansible — Aegis fail2ban configuration
+# /etc/fail2ban/jail.local
+#
+# Bu dosya playbook her çalıştığında yeniden render edilir.
+# Manuel değişiklik yapma.
+
+[DEFAULT]
+bantime   = {{ fail2ban_bantime }}
+findtime  = {{ fail2ban_findtime }}
+maxretry  = {{ fail2ban_maxretry }}
+
+# Journald üzerinden okur; log rotation ile race condition olmaz
+backend   = systemd
+
+# Tüm portları engelle (sadece SSH değil): saldırgan IP tamamen kesilir
+banaction = iptables-allports
+
+# Bu adresler hiçbir zaman ban'lanmaz
+ignoreip  = 127.0.0.1/8 ::1 {{ fail2ban_ignoreip | join(' ') }}
+
+
+# --- SSH jail ---
+[sshd]
+enabled = true
+port    = {{ ssh_port }}
+
+
+# --- Recidive jail (tekrarlayan saldırganlar) ---
+# fail2ban'ın kendi logunu okur; 24 saat içinde 3 kez ban yiyen IP'ye 1 hafta ban
+[recidive]
+enabled   = true
+logpath   = /var/log/fail2ban.log
+backend   = auto
+banaction = iptables-allports
+bantime   = {{ fail2ban_recidive_bantime }}
+findtime  = {{ fail2ban_recidive_findtime }}
+maxretry  = {{ fail2ban_recidive_maxretry }}

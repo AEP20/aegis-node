@@ -8,7 +8,7 @@ from app.services.health import get_health
 from app.services.wg import get_peers, add_peer, remove_peer, provision_peer, ADMIN_PEER_IP
 from app.services.monitor import (
     get_system_stats, get_services, get_wg_traffic, get_ssh_events, get_ssh_timeline,
-    get_performance_metrics
+    get_performance_metrics, get_fail2ban_status
 )
 from app.services.labels import get_labels, set_label, set_peer_metadata
 from pydantic import BaseModel, validator
@@ -175,6 +175,12 @@ def monitor_ssh_timeline(tz_offset: int = Query(0, ge=-720, le=840)):
     Default is 0 (UTC).
     """
     return {"timeline": get_ssh_timeline(tz_offset)}
+
+
+@app.get("/api/monitor/fail2ban", dependencies=[Depends(verify_token)])
+def monitor_fail2ban():
+    return get_fail2ban_status()
+
 
 @app.get("/api/monitor/performance", dependencies=[Depends(verify_token)])
 def api_monitor_performance():

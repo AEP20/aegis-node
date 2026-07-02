@@ -77,7 +77,7 @@
   copy:
     dest: /etc/sudoers.d/aegis-wg
     content: |
-      {{ aegis_system_user }} ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/awg, /usr/bin/tee, /usr/bin/tail, /bin/cat{% if dashboard_allow_reboot %}, /usr/sbin/shutdown{% endif %}
+      {{ aegis_system_user }} ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/awg, /usr/bin/tee, /usr/bin/tail, /bin/cat, /usr/bin/fail2ban-client{% if dashboard_allow_reboot %}, /usr/sbin/shutdown{% endif %}
 
     owner: root
     group: root

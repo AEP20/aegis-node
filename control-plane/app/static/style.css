@@ -925,6 +925,39 @@ input::placeholder { color: var(--text-dim); }
   display: flex; flex-direction: column; gap: 4px;
   max-height: 380px; overflow-y: auto;
 }
+
+/* fail2ban stats row */
+.f2b-stats {
+  display: flex; gap: 24px; margin-bottom: 4px;
+}
+.f2b-stat {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.f2b-stat-label {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--text-dim); text-transform: lowercase;
+}
+.f2b-stat-value {
+  font-family: var(--font-mono); font-size: 22px; font-weight: 700;
+  color: var(--text);
+}
+.f2b-stat-value.has-bans { color: var(--red); }
+
+/* fail2ban ban row */
+.f2b-ban {
+  display: grid;
+  grid-template-columns: 130px 70px 120px 1fr;
+  align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 4px;
+  background: var(--bg);
+  border-left: 2px solid var(--red);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.f2b-ban-ts   { color: var(--text-dim); }
+.f2b-ban-jail { color: var(--text-muted); }
+.f2b-ban-ip   { color: var(--text); font-weight: 500; }
+.f2b-ban-geo  { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .ssh-event {
   display: grid;
   grid-template-columns: 130px 80px 100px 90px 45px 1fr;

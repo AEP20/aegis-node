@@ -471,19 +471,20 @@ let _monitorInterval = null;
 
 async function loadMonitor() {
   try {
-    const [sys, svc, traffic, ssh, timeline] = await Promise.all([
+    const [sys, svc, traffic, ssh, timeline, f2b] = await Promise.all([
       API.get("/api/monitor/system"),
       API.get("/api/monitor/services"),
       API.get("/api/monitor/traffic"),
       API.get("/api/monitor/ssh"),
       API.get("/api/monitor/ssh/timeline?tz_offset=" + (-new Date().getTimezoneOffset())),
-
+      API.get("/api/monitor/fail2ban"),
     ]);
     renderSystem(sys);
     renderServices(svc.services ?? []);
     renderTraffic(traffic.peers ?? []);
     renderTimeline(timeline.timeline ?? []);
     renderSSH(ssh.events ?? []);
+    renderFail2ban(f2b);
   } catch (e) {
     if (e.message !== "unauthorized") console.error("monitor error", e);
   }
@@ -734,6 +735,41 @@ function renderSSH(events) {
       <span class="ssh-ip">${e.ip}</span>
       ${e.geo ? `<span class="ssh-geo" title="${e.geo}">${e.geo.split(' ')[0]}</span>` : ''}
       <span class="ssh-port">:${e.port}</span>
+    </div>`).join("");
+}
+
+function renderFail2ban(data) {
+  const current = document.getElementById("f2b-current");
+  const total   = document.getElementById("f2b-total");
+  const failed  = document.getElementById("f2b-failed");
+  const bansEl  = document.getElementById("mon-f2b-bans");
+
+  if (!data || !data.available) {
+    if (current) current.textContent = "—";
+    if (total)   total.textContent   = "—";
+    if (failed)  failed.textContent  = "—";
+    if (bansEl)  bansEl.innerHTML    = `<p class="empty-state">fail2ban not available</p>`;
+    return;
+  }
+
+  if (current) {
+    current.textContent = data.currently_banned ?? 0;
+    current.classList.toggle("has-bans", (data.currently_banned ?? 0) > 0);
+  }
+  if (total)  total.textContent  = data.total_banned  ?? 0;
+  if (failed) failed.textContent = data.total_failed  ?? 0;
+
+  const bans = data.recent_bans ?? [];
+  if (!bans.length) {
+    bansEl.innerHTML = `<p class="empty-state">no bans recorded</p>`;
+    return;
+  }
+  bansEl.innerHTML = bans.map(b => `
+    <div class="f2b-ban">
+      <span class="f2b-ban-ts">${b.timestamp}</span>
+      <span class="f2b-ban-jail">${b.jail}</span>
+      <span class="f2b-ban-ip">${b.ip}</span>
+      <span class="f2b-ban-geo">${b.geo ?? ""}</span>
     </div>`).join("");
 }
 

@@ -192,6 +192,30 @@ ssh_pubkey_auth: "yes"
 
 
 # =============================================================================
+# fail2ban — Brute-Force Protection
+# =============================================================================
+# SSH'a yönelik brute-force saldırılarını engeller.
+# İki kademeli ban: ilk ihlal 1 saat, tekrarlayan saldırgan 1 hafta.
+# =============================================================================
+
+# İlk ihlal: findtime içinde maxretry başarısız girişim → bantime kadar ban
+fail2ban_bantime: 3600     # 1 saat
+fail2ban_findtime: 600     # 10 dakikalık pencere
+fail2ban_maxretry: 5       # 5 başarısız deneme
+
+# Recidive: 24 saat içinde 3 kez ban yiyen IP → 1 hafta ban
+fail2ban_recidive_bantime: 604800    # 1 hafta
+fail2ban_recidive_findtime: 86400    # 24 saatlik pencere
+fail2ban_recidive_maxretry: 3        # 3. ban → haftalık ban
+
+# Bu adresler hiçbir zaman ban'lanmaz
+# VPN subnet zorunlu; kendi yönetim IP'lerini de ekle
+fail2ban_ignoreip:
+  - "10.66.66.0/24"
+
+
+
+# =============================================================================
 # Network Hardening — Kernel & Routing Controls
 # =============================================================================
 # sysctl-level protections against spoofing, misrouting and SYN floods.

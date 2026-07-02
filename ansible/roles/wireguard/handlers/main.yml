@@ -7,6 +7,9 @@
   become: true
 
 - name: Save iptables rules
-  command: netfilter-persistent save
+  shell: |
+    set -o pipefail
+    iptables-save  | grep -v 'f2b-' > /etc/iptables/rules.v4
+    ip6tables-save | grep -v 'f2b-' > /etc/iptables/rules.v6
   become: true
   changed_when: true

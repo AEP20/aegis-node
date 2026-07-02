@@ -282,6 +282,29 @@
             <p class="empty-state">loading…</p>
           </div>
         </div>
+
+        <!-- fail2ban -->
+        <div class="card">
+          <p class="card-title">fail2ban</p>
+          <div class="f2b-stats">
+            <div class="f2b-stat">
+              <span class="f2b-stat-label">currently banned</span>
+              <span id="f2b-current" class="f2b-stat-value">—</span>
+            </div>
+            <div class="f2b-stat">
+              <span class="f2b-stat-label">total banned</span>
+              <span id="f2b-total" class="f2b-stat-value">—</span>
+            </div>
+            <div class="f2b-stat">
+              <span class="f2b-stat-label">total failed</span>
+              <span id="f2b-failed" class="f2b-stat-value">—</span>
+            </div>
+          </div>
+          <p class="card-title" style="margin-top:16px">recent bans</p>
+          <div id="mon-f2b-bans" class="ssh-log">
+            <p class="empty-state">loading…</p>
+          </div>
+        </div>
       </section>
 
       <!-- Performance tab -->

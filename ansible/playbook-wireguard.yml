@@ -104,6 +104,7 @@
     - dns
     - firewall
     - hardening
+    - fail2ban
     - dashboard
 
   post_tasks:

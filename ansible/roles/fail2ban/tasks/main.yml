@@ -1,0 +1,40 @@
+# roles/fail2ban/tasks/main.yml
+
+- name: Install fail2ban and systemd journal backend dependency
+  apt:
+    name:
+      - fail2ban
+      - python3-systemd
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Configure fail2ban daemon logging
+  copy:
+    dest: /etc/fail2ban/fail2ban.local
+    content: |
+      [Definition]
+      logtarget = /var/log/fail2ban.log
+      loglevel  = INFO
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart fail2ban
+
+- name: Deploy jail configuration
+  template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart fail2ban
+
+- name: Enable and start fail2ban
+  systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+  become: true
