@@ -1,4 +1,5 @@
 galaxy_info:
+  author: Aegis Node maintainers
   role_name: fail2ban
   description: Install and configure fail2ban for SSH brute-force protection
   license: MIT

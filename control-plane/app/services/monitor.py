@@ -148,6 +148,7 @@ _SERVICES = [
     {"name": VPN_SERVICE_NAME,        "label": f"{VPN_TRANSPORT_LABEL.lower()} ({VPN_INTERFACE})"},
     {"name": "aegis-api",            "label": "aegis api"},
     {"name": "unbound",              "label": "unbound dns"},
+    {"name": "fail2ban",             "label": "fail2ban"},
     {"name": "ssh",                  "label": "openssh"},
     {"name": "netfilter-persistent", "label": "iptables persist"},
 ]
@@ -405,21 +406,23 @@ def get_ssh_timeline(tz_offset_minutes: int = 0):
                     "time": local_time,   # local time -> correct position on axis
                 })
 
+    return list(day_index.values())
+
 
 # ── fail2ban ──────────────────────────────────────────────────
 
-_F2B_JAIL_RE  = re.compile(r'\[(\w+)\]')
 _F2B_BAN_RE   = re.compile(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ .*\[(\w+)\] Ban ([\d.a-fA-F:]+)')
 
 
 def _f2b_jail_stats(jail: str) -> dict:
     """fail2ban-client status <jail> çıktısını parse eder."""
-    stats = {"currently_banned": 0, "total_banned": 0, "total_failed": 0}
+    stats = {"available": False, "currently_banned": 0, "total_banned": 0, "total_failed": 0}
     try:
         out = subprocess.check_output(
             ["sudo", "fail2ban-client", "status", jail],
             text=True, stderr=subprocess.DEVNULL, timeout=5,
         )
+        stats["available"] = True
         for line in out.splitlines():
             line = line.strip()
             if "Currently banned:" in line:
@@ -444,7 +447,7 @@ def get_fail2ban_status() -> dict:
 
     # Birincil jail: sshd
     sshd = _f2b_jail_stats("sshd")
-    if sshd["total_banned"] > 0 or sshd["currently_banned"] >= 0:
+    if sshd["available"]:
         result["available"]        = True
         result["currently_banned"] += sshd["currently_banned"]
         result["total_banned"]     += sshd["total_banned"]
@@ -452,8 +455,10 @@ def get_fail2ban_status() -> dict:
 
     # Recidive jail (varsa eklenir, yoksa sessizce atlanır)
     recidive = _f2b_jail_stats("recidive")
-    result["currently_banned"] += recidive["currently_banned"]
-    result["total_banned"]     += recidive["total_banned"]
+    if recidive["available"]:
+        result["available"]        = True
+        result["currently_banned"] += recidive["currently_banned"]
+        result["total_banned"]     += recidive["total_banned"]
 
     # Son banları logdan oku (tail sudoers'da mevcut)
     try:
@@ -480,5 +485,3 @@ def get_fail2ban_status() -> dict:
         pass
 
     return result
-
-    return list(day_index.values())

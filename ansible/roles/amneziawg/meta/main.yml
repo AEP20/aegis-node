@@ -1,5 +1,6 @@
 ---
 galaxy_info:
+  author: Aegis Node maintainers
   role_name: amneziawg
   description: Install and configure AmneziaWG transport backend
   license: MIT
