@@ -50,7 +50,7 @@
   become: true
   become_user: "{{ aegis_system_user }}"
   environment:
-    HOME: "{{ dashboard_app_dir }}"
+    HOME : "{{ dashboard_app_dir }}"
 
 
 - name: Ensure venv ownership is correct
