@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+UNBOUND_CONF = Path("/etc/unbound/unbound.conf")
+TIMER_PATH = Path("/etc/systemd/system/aegis-dns-cache-flush.timer")
+SERVICE_PATH = Path("/etc/systemd/system/aegis-dns-cache-flush.service")
+
+PRIVACY_VALUES = {
+    "verbosity": "0",
+    "log-queries": "no",
+    "log-replies": "no",
+    "cache-min-ttl": "0",
+    "cache-max-ttl": "900",
+    "prefetch": "no",
+}
+
+DEFAULT_VALUES = {
+    "verbosity": "0",
+    "cache-min-ttl": "3600",
+    "cache-max-ttl": "86400",
+    "prefetch": "yes",
+}
+
+
+def run(cmd, check=True):
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
+def read_config():
+    if not UNBOUND_CONF.exists():
+        return ""
+    return UNBOUND_CONF.read_text()
+
+
+def parse_value(text, key):
+    match = re.search(rf"^\s*{re.escape(key)}\s*:\s*(\S+)", text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def upsert_server_option(text, key, value):
+    line_re = re.compile(rf"^(\s*){re.escape(key)}\s*:\s*\S+.*$", re.MULTILINE)
+    if line_re.search(text):
+        return line_re.sub(lambda match: f"{match.group(1)}{key}: {value}", text, count=1)
+
+    server_match = re.search(r"^server:\s*$", text, re.MULTILINE)
+    if not server_match:
+        return text.rstrip() + f"\n\nserver:\n    {key}: {value}\n"
+
+    insert_at = server_match.end()
+    return text[:insert_at] + f"\n    {key}: {value}" + text[insert_at:]
+
+
+def remove_option(text, key):
+    line_re = re.compile(rf"^\s*{re.escape(key)}\s*:\s*\S+.*\n?", re.MULTILINE)
+    return line_re.sub("", text)
+
+
+def write_config_values(values, remove_keys=()):
+    text = read_config()
+    if not text:
+        raise RuntimeError(f"{UNBOUND_CONF} does not exist")
+    original = text
+
+    backup = UNBOUND_CONF.with_suffix(UNBOUND_CONF.suffix + ".aegis.bak")
+    if not backup.exists():
+        backup.write_text(text)
+
+    for key in remove_keys:
+        text = remove_option(text, key)
+    for key, value in values.items():
+        text = upsert_server_option(text, key, value)
+
+    try:
+        UNBOUND_CONF.write_text(text)
+        if Path("/usr/sbin/unbound-checkconf").exists():
+            run(["/usr/sbin/unbound-checkconf", str(UNBOUND_CONF)])
+        run(["systemctl", "restart", "unbound"])
+    except Exception:
+        UNBOUND_CONF.write_text(original)
+        run(["systemctl", "restart", "unbound"], check=False)
+        raise
+
+
+def ensure_timer(enabled):
+    SERVICE_PATH.write_text(
+        "[Unit]\n"
+        "Description=Aegis DNS cache flush\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        "ExecStart=/usr/sbin/unbound-control flush_zone .\n"
+    )
+    TIMER_PATH.write_text(
+        "[Unit]\n"
+        "Description=Flush Unbound DNS cache for Aegis privacy mode\n\n"
+        "[Timer]\n"
+        "OnBootSec=15min\n"
+        "OnUnitActiveSec=15min\n"
+        "AccuracySec=1min\n"
+        "Persistent=false\n\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+    run(["systemctl", "daemon-reload"])
+    if enabled:
+        run(["systemctl", "enable", "--now", "aegis-dns-cache-flush.timer"])
+    else:
+        run(["systemctl", "disable", "--now", "aegis-dns-cache-flush.timer"], check=False)
+
+
+def flush_cache():
+    run(["unbound-control", "flush_zone", "."], check=False)
+
+
+def cache_line_count():
+    result = run(["unbound-control", "dump_cache"], check=False)
+    if result.returncode != 0:
+        return None
+    return len(result.stdout.splitlines())
+
+
+def timer_state():
+    result = run(
+        ["systemctl", "show", "aegis-dns-cache-flush.timer", "-p", "ActiveState", "-p", "UnitFileState", "--value"],
+        check=False,
+    )
+    vals = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    active = vals[0] if vals else "inactive"
+    unit_file = vals[1] if len(vals) > 1 else "disabled"
+    return active, unit_file
+
+
+def status():
+    text = read_config()
+    cache_max = parse_value(text, "cache-max-ttl")
+    cache_min = parse_value(text, "cache-min-ttl")
+    prefetch = parse_value(text, "prefetch")
+    log_queries = parse_value(text, "log-queries") or "no"
+    log_replies = parse_value(text, "log-replies") or "no"
+    active, unit_file = timer_state()
+    enabled = (
+        cache_max == PRIVACY_VALUES["cache-max-ttl"]
+        and prefetch == PRIVACY_VALUES["prefetch"]
+        and log_queries != "yes"
+        and log_replies != "yes"
+        and active == "active"
+    )
+    return {
+        "status": "ok",
+        "enabled": enabled,
+        "cache_entries": cache_line_count(),
+        "cache_max_ttl": int(cache_max) if cache_max and cache_max.isdigit() else None,
+        "cache_min_ttl": int(cache_min) if cache_min and cache_min.isdigit() else None,
+        "prefetch": prefetch,
+        "query_logging": log_queries == "yes" or log_replies == "yes",
+        "auto_flush": active == "active",
+        "timer_state": active,
+        "timer_enabled": unit_file == "enabled",
+    }
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in {"status", "enable", "disable", "flush"}:
+        print("usage: aegis-dns-privacy status|enable|disable|flush", file=sys.stderr)
+        return 2
+
+    action = sys.argv[1]
+    if action == "enable":
+        write_config_values(PRIVACY_VALUES)
+        ensure_timer(True)
+        flush_cache()
+    elif action == "disable":
+        write_config_values(DEFAULT_VALUES, remove_keys=("log-queries", "log-replies"))
+        ensure_timer(False)
+    elif action == "flush":
+        flush_cache()
+
+    print(json.dumps(status()))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

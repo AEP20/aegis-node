@@ -10,6 +10,9 @@ WorkingDirectory={{ dashboard_app_dir }}
 
 Environment="AEGIS_AUTH_ENABLED={{ 'true' if dashboard_enable_auth else 'false' }}"
 Environment="AEGIS_AUTH_TOKEN={{ dashboard_auth_token }}"
+Environment="AEGIS_AUTH_TOKEN_FILE={{ dashboard_app_dir }}/dashboard_token"
+Environment="DASHBOARD_BIND_HOST={{ dashboard_bind_host }}"
+Environment="DASHBOARD_BIND_PORT={{ dashboard_bind_port }}"
 Environment="VPN_TRANSPORT={{ vpn_transport }}"
 Environment="VPN_TRANSPORT_LABEL={{ vpn_transport_label }}"
 Environment="VPN_CLI={{ 'awg' if vpn_transport == 'amneziawg' else 'wg' }}"
@@ -26,6 +29,7 @@ Environment="WG_ENDPOINT={{ ansible_host }}:{{ wg_port }}"
 Environment="WG_CONFIG_PATH={{ wg_config_path }}"
 Environment="WG_SERVER_PUBLIC_KEY_PATH={{ dashboard_app_dir }}/server_public.key"
 Environment="PEER_LABELS_PATH={{ dashboard_labels_path }}"
+Environment="PROVISIONING_DEFAULTS_PATH={{ dashboard_app_dir }}/provisioning_defaults.json"
 Environment="GEO_DB_PATH={{ dashboard_geo_db_path }}"
 Environment="WG_HANDSHAKE_THRESHOLD={{ wg_handshake_threshold }}"
 {% if vpn_transport == "amneziawg" %}

@@ -21,4 +21,5 @@ dev-docs/*
 .github/PULL_REQUEST_TEMPLATE.md
 docs/*
 !docs/amneziawg-transport-plan.md
+!docs/control-plane-operations-settings-plan.md
 SECURITY.md

@@ -10,6 +10,7 @@ import os
 
 
 from app.services.constants import HANDSHAKE_ACTIVE_THRESHOLD
+from app.services.settings import get_provisioning_defaults
 
 VPN_TRANSPORT = os.getenv("VPN_TRANSPORT", "wireguard").strip().lower()
 VPN_TRANSPORT_LABEL = os.getenv(
@@ -261,14 +262,18 @@ def _amneziawg_params() -> dict:
     return params
 
 
-def _client_config(private_key: str, allowed_ip: str, server_pub: str) -> str:
+def _client_config(private_key: str, allowed_ip: str, server_pub: str, defaults: dict = None) -> str:
+    defaults = defaults or get_provisioning_defaults()
     dns_ip = VPN_SERVER_IP
     interface_lines = [
         "[Interface]",
         f"PrivateKey = {private_key}",
         f"Address = {allowed_ip}",
-        f"DNS = {dns_ip}",
     ]
+    if defaults.get("dns_enabled", True):
+        interface_lines.append(f"DNS = {dns_ip}")
+    if defaults.get("mtu"):
+        interface_lines.append(f"MTU = {defaults['mtu']}")
 
     if VPN_TRANSPORT == "amneziawg":
         params = _amneziawg_params()
@@ -282,8 +287,10 @@ def _client_config(private_key: str, allowed_ip: str, server_pub: str) -> str:
         f"PublicKey = {server_pub}",
         f"Endpoint = {VPN_ENDPOINT}",
         "AllowedIPs = 0.0.0.0/0",
-        "PersistentKeepalive = 25",
     ]
+    keepalive = defaults.get("persistent_keepalive")
+    if keepalive is not None:
+        peer_lines.append(f"PersistentKeepalive = {keepalive}")
 
     return "\n".join(interface_lines + peer_lines)
 
@@ -313,6 +320,7 @@ def _linux_install_command(config: str) -> str:
 
 
 def provision_peer():
+    defaults = get_provisioning_defaults()
     # 1. Generate keypair
     private_key = subprocess.check_output([VPN_CLI, "genkey"], text=True).strip()
     public_key  = subprocess.check_output(
@@ -337,7 +345,7 @@ def provision_peer():
         server_pub = f.read().strip()
 
     # 6. Build client config
-    config = _client_config(private_key, allowed_ip, server_pub)
+    config = _client_config(private_key, allowed_ip, server_pub, defaults)
 
     # 7. Generate QR code
     img = qrcode.make(config)
@@ -356,4 +364,5 @@ def provision_peer():
         "endpoint":   VPN_ENDPOINT,
         "client_app": "AmneziaWG / Amnezia VPN" if VPN_TRANSPORT == "amneziawg" else "WireGuard",
         "install_command": _linux_install_command(config),
+        "provisioning_defaults": defaults,
     }

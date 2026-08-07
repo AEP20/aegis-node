@@ -13,12 +13,14 @@ const API = {
   async get(path) {
     const res = await fetch(path, { headers: this.headers() });
     if (res.status === 401 || res.status === 403) { logout(); throw new Error("unauthorized"); }
+    if (!res.ok) throw await apiError(res);
     return res.json();
   },
 
   async post(path, body) {
     const res = await fetch(path, { method: "POST", headers: this.headers(), body: JSON.stringify(body) });
     if (res.status === 401 || res.status === 403) { logout(); throw new Error("unauthorized"); }
+    if (!res.ok) throw await apiError(res);
     return res.json();
   },
 
@@ -27,9 +29,19 @@ const API = {
     if (body !== undefined) opts.body = JSON.stringify(body);
     const res = await fetch(path, opts);
     if (res.status === 401 || res.status === 403) { logout(); throw new Error("unauthorized"); }
+    if (!res.ok) throw await apiError(res);
     return res.json();
   },
 };
+
+async function apiError(res) {
+  try {
+    const body = await res.json();
+    return new Error(body.detail || body.message || res.statusText);
+  } catch {
+    return new Error(res.statusText || `HTTP ${res.status}`);
+  }
+}
 
 let activeTransport = {
   transport: "wireguard",
@@ -812,6 +824,19 @@ let _perfRxBytes = 0;
 let _perfTxBytes = 0;
 let _perfTimestamp = 0;
 let _performanceInterval = null;
+let _dnsPrivacyLastLoad = 0;
+let _dnsPrivacyBusy = false;
+let _operationsLastLoad = 0;
+let _operationsBusy = false;
+let _dnsModeLastLoad = 0;
+let _provisionDefaultsLastLoad = 0;
+let _accessControlLastLoad = 0;
+let _lastProvisioningDefaults = null;
+
+function confirmRisk(title, details = []) {
+  const lines = [title, ...details.filter(Boolean)];
+  return confirm(lines.join("\n\n"));
+}
 
 function setPerfIndicator(id, txt, cls) {
   const el = document.getElementById(id);
@@ -868,18 +893,814 @@ async function loadPerformance() {
     _perfRxBytes = d.wg_rx_bytes;
     _perfTxBytes = d.wg_tx_bytes;
     _perfTimestamp = d.timestamp;
+
+    const now = Date.now();
+    if (now - _dnsPrivacyLastLoad > 10_000) {
+      _dnsPrivacyLastLoad = now;
+      loadDnsPrivacyStatus();
+    }
+    if (now - _operationsLastLoad > 10_000) {
+      _operationsLastLoad = now;
+      loadOperationsStatus();
+    }
+    if (now - _dnsModeLastLoad > 15_000) {
+      _dnsModeLastLoad = now;
+      loadDnsModeStatus();
+    }
+    if (now - _provisionDefaultsLastLoad > 15_000) {
+      _provisionDefaultsLastLoad = now;
+      loadProvisioningDefaults();
+    }
+    if (now - _accessControlLastLoad > 15_000) {
+      _accessControlLastLoad = now;
+      loadAccessControlStatus();
+    }
     
   } catch (e) {
     if (e.message !== "unauthorized") console.error("Perf poll err:", e);
   }
 }
 
+async function loadOperationsStatus() {
+  try {
+    const d = await API.get("/api/system/operations");
+    renderOperations(d);
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      const reboot = document.getElementById("ops-reboot-status");
+      const vpn = document.getElementById("ops-vpn-status");
+      if (reboot) reboot.textContent = "status unavailable";
+      if (vpn) vpn.textContent = "status unavailable";
+    }
+  }
+}
+
+function renderOperations(d) {
+  const update = d.update_reboot || {};
+  const next = update.next_boot || {};
+  const guard = d.vpn_guard || {};
+  const runtime = guard.runtime || {};
+
+  const rebootStatus = document.getElementById("ops-reboot-status");
+  const runningKernel = document.getElementById("ops-running-kernel");
+  const nextBoot = document.getElementById("ops-next-boot");
+  const preflight = document.getElementById("ops-preflight");
+
+  if (rebootStatus) {
+    const parts = [];
+    parts.push(update.reboot_required ? "reboot required" : "no reboot required");
+    if (update.pending_kernel_mismatch) parts.push("new kernel pending");
+    parts.push(update.unattended_upgrades?.active === "active" ? "auto updates active" : "auto updates inactive");
+    rebootStatus.textContent = parts.join(" · ");
+  }
+  if (runningKernel) runningKernel.textContent = update.running_kernel || "—";
+  if (nextBoot) nextBoot.textContent = update.boot_target_kernel || "—";
+  if (preflight) {
+    preflight.textContent = next.pass ? "ready" : "attention";
+    preflight.className = next.pass ? "ops-good" : "ops-warn";
+  }
+
+  const vpnBadge = document.getElementById("ops-vpn-badge");
+  const vpnStatus = document.getElementById("ops-vpn-status");
+  const service = guard.services?.find((s) => s.name === guard.service);
+  const serviceUp = service?.active === "active";
+  const interfaceUp = !!runtime.interface_up;
+
+  if (vpnBadge) {
+    vpnBadge.className = serviceUp && interfaceUp ? "badge badge-active" : "badge badge-stale";
+    vpnBadge.textContent = serviceUp && interfaceUp ? "healthy" : "attention";
+  }
+  if (vpnStatus) {
+    const peerCount = runtime.peer_count ?? "—";
+    const port = runtime.listen_port ? `udp/${runtime.listen_port}` : "port —";
+    const address = runtime.address || "no address";
+    vpnStatus.textContent = `${guard.label || "VPN"} · ${guard.interface || "—"} · ${address} · ${port} · peers ${peerCount}`;
+  }
+
+  renderLoggingProfile(d.logging_profile || {});
+  renderFail2banControls(d.fail2ban_control || {});
+  renderNetworkTuning(d.network_tuning || {});
+}
+
+async function runOperationsAction(action) {
+  const labels = {
+    "restart-vpn": "Restart VPN service? Active clients may reconnect.",
+    "restart-dns": "Restart DNS resolver?",
+    "restart-api": "Restart control-plane API?",
+  };
+  if (!confirmRisk(labels[action] || "Run action?", [
+    "This action is applied immediately on the server.",
+  ])) return;
+
+  _operationsBusy = true;
+  setOpsButtonsDisabled(true);
+  try {
+    const d = await API.post("/api/system/operations/action", { action });
+    if (d.update_reboot || d.vpn_guard) renderOperations(d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && action !== "restart-api") alert("Action failed: " + e.message);
+  } finally {
+    _operationsBusy = false;
+    setOpsButtonsDisabled(false);
+    _operationsLastLoad = 0;
+    setTimeout(loadOperationsStatus, 800);
+  }
+}
+
+function renderNetworkTuning(d) {
+  const badge = document.getElementById("net-tuning-badge");
+  const status = document.getElementById("net-tuning-status");
+  const mtu = document.getElementById("net-current-mtu");
+  const port = document.getElementById("net-listen-port");
+  const drops = document.getElementById("net-drops");
+  const rx = d.drops?.rx;
+  const tx = d.drops?.tx;
+  const dropCount = (rx ?? 0) + (tx ?? 0);
+
+  if (badge) {
+    badge.className = dropCount > 0 ? "badge badge-stale" : "badge badge-active";
+    badge.textContent = dropCount > 0 ? "drops seen" : "clean";
+  }
+  if (status) status.textContent = `${d.interface || "—"} runtime status`;
+  if (mtu) mtu.textContent = d.mtu ?? "—";
+  if (port) port.textContent = d.listen_port ? `udp/${d.listen_port}` : "—";
+  if (drops) drops.textContent = `rx ${rx ?? "—"} · tx ${tx ?? "—"}`;
+}
+
+function provisioningDefaultsSummary(d = {}) {
+  const prefix = d.label_prefix ? `prefix ${d.label_prefix}` : "no prefix";
+  const keepalive = d.persistent_keepalive == null ? "keepalive off" : `keepalive ${d.persistent_keepalive}`;
+  const mtu = d.mtu == null ? "mtu auto" : `mtu ${d.mtu}`;
+  const dns = d.dns_enabled === false ? "dns off" : "dns on";
+  return `${prefix}, ${keepalive}, ${mtu}, ${dns}`;
+}
+
+function inferProvisioningPreset(d = {}) {
+  const keepalive = d.persistent_keepalive == null ? null : Number(d.persistent_keepalive);
+  const mtu = d.mtu == null ? null : Number(d.mtu);
+  if (mtu === null && keepalive === 25) return "default";
+  if (mtu === 1280 && keepalive === 25) return "mobile";
+  if (mtu === 1360 && keepalive === 25) return "conservative";
+  return "custom";
+}
+
+function updateNetworkPresetState(d = {}) {
+  const preset = inferProvisioningPreset(d);
+  const badge = document.getElementById("net-preset-badge");
+  const status = document.getElementById("net-preset-status");
+  ["default", "mobile", "conservative"].forEach((name) => {
+    const btn = document.getElementById(`net-preset-${name}`);
+    if (btn) btn.classList.toggle("btn-option-active", preset === name);
+  });
+  if (badge) {
+    badge.className = preset === "custom" ? "badge badge-idle" : "badge badge-active";
+    badge.textContent = preset;
+  }
+  if (status) status.textContent = `current: ${provisioningDefaultsSummary(d)}`;
+}
+
+async function applyNetworkPreset(name) {
+  const presets = {
+    default: { mtu: null, persistent_keepalive: 25 },
+    mobile: { mtu: 1280, persistent_keepalive: 25 },
+    conservative: { mtu: 1360, persistent_keepalive: 25 },
+  };
+  const preset = presets[name];
+  const status = document.getElementById("net-preset-status");
+  if (!preset) return;
+  if (!confirmRisk(`Apply ${name} provisioning preset?`, [
+    "This changes defaults for newly provisioned peers only.",
+    "Existing peers and live interface settings will not be rewritten.",
+  ])) return;
+  if (status) status.textContent = "saving provisioning preset…";
+  try {
+    const current = await API.get("/api/system/provisioning-defaults");
+    const defaults = current.defaults || {};
+    const payload = {
+      label_prefix: defaults.label_prefix || "",
+      dns_enabled: defaults.dns_enabled !== false,
+      persistent_keepalive: preset.persistent_keepalive,
+      mtu: preset.mtu,
+    };
+    const d = await API.post("/api/system/provisioning-defaults", payload);
+    renderProvisioningDefaults(d.defaults || {});
+    if (status) status.textContent = `${name} preset saved for newly provisioned peers`;
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "preset save failed";
+  } finally {
+    _provisionDefaultsLastLoad = 0;
+  }
+}
+
+async function runMaintenanceAction(action) {
+  const labels = {
+    "flush-dns": "Flush DNS resolver cache?",
+    "save-iptables": "Save current iptables rules for persistence?",
+    "dkms-check": "Run DKMS health check?",
+    "restart-vpn": "Restart VPN service? Active clients may reconnect.",
+    "restart-dns": "Restart DNS resolver?",
+    "restart-api": "Restart control-plane API?",
+  };
+  const disruptive = ["save-iptables", "restart-vpn", "restart-dns", "restart-api"];
+  const details = disruptive.includes(action)
+    ? ["This is a live system action.", "Active clients may briefly reconnect or service state may change."]
+    : [];
+  if (!confirmRisk(labels[action] || "Run maintenance action?", details)) return;
+
+  const status = document.getElementById("maintenance-status");
+  const badge = document.getElementById("maintenance-badge");
+  if (badge) {
+    badge.className = "badge badge-idle";
+    badge.textContent = "running";
+  }
+  if (status) status.textContent = "running action…";
+
+  try {
+    let d;
+    if (action === "flush-dns") {
+      d = await API.post("/api/system/dns-privacy/flush", {});
+      if (status) status.textContent = "DNS cache flushed";
+    } else {
+      d = await API.post("/api/system/operations/action", { action });
+      if (status) {
+        if (action === "dkms-check") {
+          status.textContent = `${d.message || "DKMS checked"} · ${d.kernel || "kernel —"}`;
+        } else {
+          status.textContent = d.message || d.restarting || "action completed";
+        }
+      }
+    }
+    if (badge) {
+      const ok = d.pass !== false && d.status !== "error";
+      badge.className = ok ? "badge badge-active" : "badge badge-stale";
+      badge.textContent = ok ? "ok" : "attention";
+    }
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      if (action === "restart-api") {
+        if (status) status.textContent = "API restart requested";
+        if (badge) {
+          badge.className = "badge badge-active";
+          badge.textContent = "sent";
+        }
+      } else {
+        if (status) status.textContent = "maintenance action failed";
+        if (badge) {
+          badge.className = "badge badge-stale";
+          badge.textContent = "failed";
+        }
+      }
+    }
+  } finally {
+    _operationsLastLoad = 0;
+    if (action !== "restart-api") setTimeout(loadOperationsStatus, 800);
+  }
+}
+
+function setOpsButtonsDisabled(disabled) {
+  ["ops-restart-vpn", "ops-restart-dns", "ops-restart-api"].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = disabled || _operationsBusy;
+  });
+}
+
+async function loadAccessControlStatus() {
+  try {
+    const d = await API.get("/api/system/access-control");
+    renderAccessControl(d);
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      const status = document.getElementById("access-status");
+      if (status) status.textContent = "access status unavailable";
+    }
+  }
+}
+
+function renderAccessControl(d) {
+  const badge = document.getElementById("access-auth-badge");
+  const status = document.getElementById("access-status");
+  const bind = document.getElementById("access-bind");
+  const age = document.getElementById("access-token-age");
+  const warning = document.getElementById("access-warning");
+
+  if (badge) {
+    badge.className = d.auth_enabled ? "badge badge-active" : "badge badge-stale";
+    badge.textContent = d.auth_enabled ? "auth on" : "auth off";
+  }
+  if (status) {
+    const tokenState = d.token_configured ? "token configured" : "token missing";
+    status.textContent = `${tokenState} · ${d.token_file_exists ? "file-backed" : "env-backed"}`;
+  }
+  if (bind) bind.textContent = `${d.bind_host || "—"}${d.bind_port ? `:${d.bind_port}` : ""}`;
+  if (age) age.textContent = d.token_age_seconds == null ? "—" : _formatAgeBrief(d.token_age_seconds);
+  if (warning) {
+    warning.textContent = d.bind_warning || "none";
+    warning.className = d.bind_warning ? "ops-warn" : "ops-good";
+  }
+}
+
+async function rotateAccessToken() {
+  const btn = document.getElementById("access-rotate-token");
+  const output = document.getElementById("access-token-output");
+  if (!confirmRisk("Rotate dashboard token?", [
+    "The old token stops working immediately.",
+    "The new token is shown once in this browser tab.",
+  ])) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "rotating…";
+  }
+  if (output) output.textContent = "rotating token…";
+  try {
+    const d = await API.post("/api/system/access-control/rotate-token", {});
+    if (output) output.textContent = `new token: ${d.new_token}`;
+    API.token = d.new_token;
+    sessionStorage.removeItem("aegis_token");
+    renderAccessControl(d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && output) output.textContent = "token rotation failed";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "rotate token";
+    }
+  }
+}
+
+function renderLoggingProfile(d) {
+  const select = document.getElementById("logging-profile");
+  const badge = document.getElementById("logging-profile-badge");
+  const status = document.getElementById("logging-profile-status");
+  if (select && ["standard", "minimal"].includes(d.profile)) select.value = d.profile;
+  if (badge) {
+    badge.className = d.profile === "minimal" ? "badge badge-active" : "badge badge-idle";
+    badge.textContent = d.profile || "standard";
+  }
+  if (status) {
+    const dns = d.dns_query_logging ? "dns query logs on" : "dns query logs off";
+    const traffic = d.traffic_logging_rules == null ? "traffic log rules unknown" : `${d.traffic_logging_rules} traffic log rules`;
+    status.textContent = `${dns} · ${traffic} · journald ${d.journald_configured ? "capped" : "system default"}`;
+  }
+}
+
+async function saveLoggingProfile() {
+  const profile = document.getElementById("logging-profile").value;
+  const btn = document.getElementById("logging-profile-save");
+  const status = document.getElementById("logging-profile-status");
+  if (!confirmRisk(`Apply ${profile} local logging profile?`, [
+    "This changes local journald/logrotate retention policy.",
+    "It does not affect provider-side metadata.",
+  ])) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "saving…";
+  }
+  if (status) status.textContent = "updating local log policy…";
+  try {
+    const d = await API.post("/api/system/logging-profile", { profile });
+    renderLoggingProfile(d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "logging profile update failed";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "save profile";
+    }
+    _operationsLastLoad = 0;
+  }
+}
+
+function renderFail2banControls(d) {
+  const badge = document.getElementById("f2b-ops-badge");
+  const status = document.getElementById("f2b-ops-status");
+  const list = document.getElementById("f2b-ops-jails");
+  const serviceActive = d.service?.active === "active";
+  if (badge) {
+    badge.className = serviceActive && d.available ? "badge badge-active" : "badge badge-stale";
+    badge.textContent = serviceActive && d.available ? "active" : "attention";
+  }
+  if (status) status.textContent = d.available ? `${d.currently_banned || 0} currently banned` : "fail2ban unavailable";
+  renderFail2banPolicy(d.policy || {});
+  if (!list) return;
+  const jails = d.jails || [];
+  if (!jails.length) {
+    list.innerHTML = '<p class="empty-state">no jail status</p>';
+    return;
+  }
+  list.innerHTML = jails.map((j) => `
+    <div class="ops-jail-row">
+      <strong>${j.jail}</strong>
+      <span>${j.available ? "available" : "missing"}</span>
+      <em>${j.currently_banned || 0} banned</em>
+    </div>`).join("");
+}
+
+function renderFail2banPolicy(policy) {
+  const fields = {
+    "f2b-policy-maxretry": policy.sshd_maxretry,
+    "f2b-policy-findtime": policy.sshd_findtime,
+    "f2b-policy-bantime": policy.sshd_bantime,
+    "f2b-policy-recidive": policy.recidive_bantime,
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el && value != null && document.activeElement !== el) el.value = value;
+  });
+  const status = document.getElementById("f2b-policy-status");
+  if (status) {
+    const source = policy.override_active ? "control-plane override active" : "live provisioned defaults";
+    status.textContent = source;
+  }
+}
+
+function _numField(id) {
+  const raw = document.getElementById(id).value.trim();
+  return raw === "" ? NaN : Number(raw);
+}
+
+async function saveFail2banPolicy() {
+  const payload = {
+    sshd_maxretry: _numField("f2b-policy-maxretry"),
+    sshd_findtime: _numField("f2b-policy-findtime"),
+    sshd_bantime: _numField("f2b-policy-bantime"),
+    recidive_bantime: _numField("f2b-policy-recidive"),
+  };
+  const status = document.getElementById("f2b-policy-status");
+  if (Object.values(payload).some((v) => !Number.isFinite(v))) {
+    if (status) status.textContent = "fill every policy field";
+    return;
+  }
+  if (!confirmRisk("Save fail2ban policy?", [
+    `SSH: ${payload.sshd_maxretry} failures within ${payload.sshd_findtime}s -> ${payload.sshd_bantime}s ban.`,
+    `Repeat offenders -> ${payload.recidive_bantime}s ban.`,
+    "Fail2ban will restart after writing the override.",
+  ])) return;
+  if (status) status.textContent = "saving fail2ban policy…";
+  try {
+    const d = await API.post("/api/system/fail2ban/policy", payload);
+    renderFail2banControls(d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "policy save failed";
+  } finally {
+    _operationsLastLoad = 0;
+    setTimeout(loadOperationsStatus, 800);
+  }
+}
+
+async function unbanFail2banIp() {
+  const input = document.getElementById("f2b-unban-ip");
+  const status = document.getElementById("f2b-ops-status");
+  const ip = input.value.trim();
+  if (!ip) return;
+  if (!confirmRisk(`Unban ${ip} from fail2ban?`, [
+    "This removes the IP from available fail2ban jails.",
+  ])) return;
+  if (status) status.textContent = "unbanning ip…";
+  try {
+    const d = await API.post("/api/system/fail2ban/unban", { ip });
+    renderFail2banControls(d);
+    input.value = "";
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "unban failed";
+  }
+}
+
+async function restartFail2ban() {
+  const status = document.getElementById("f2b-ops-status");
+  if (!confirmRisk("Restart fail2ban service?", [
+    "SSH protection may briefly reload.",
+  ])) return;
+  if (status) status.textContent = "restarting fail2ban…";
+  try {
+    const d = await API.post("/api/system/fail2ban/restart", {});
+    renderFail2banControls(d.fail2ban_control || d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "restart failed";
+  } finally {
+    _operationsLastLoad = 0;
+    setTimeout(loadOperationsStatus, 800);
+  }
+}
+
+async function loadDnsModeStatus() {
+  try {
+    const d = await API.get("/api/system/dns-mode");
+    renderDnsMode(d);
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      const status = document.getElementById("dns-mode-status");
+      if (status) status.textContent = "status unavailable";
+    }
+  }
+}
+
+function renderDnsMode(d) {
+  const preset = document.getElementById("dns-mode-preset");
+  const dot = document.getElementById("dns-mode-dot");
+  const status = document.getElementById("dns-mode-status");
+  if (preset && ["cloudflare", "quad9", "google"].includes(d.preset)) preset.value = d.preset;
+  if (dot) dot.checked = !!d.dot_enabled;
+  if (status) {
+    const mode = d.dot_enabled ? "DoT on" : "plain DNS";
+    status.textContent = `${d.preset_label || d.preset || "Custom"} · ${mode}`;
+  }
+}
+
+async function saveDnsMode() {
+  const btn = document.getElementById("dns-mode-save");
+  const status = document.getElementById("dns-mode-status");
+  const preset = document.getElementById("dns-mode-preset").value;
+  const dot = document.getElementById("dns-mode-dot").checked;
+  if (!confirmRisk("Save DNS mode?", [
+    "This rewrites Unbound upstream resolver config.",
+    "Unbound will restart after config validation.",
+  ])) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "saving…";
+  }
+  if (status) status.textContent = "updating resolver…";
+  try {
+    const d = await API.post("/api/system/dns-mode", { preset, dot_enabled: dot });
+    renderDnsMode(d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "update failed";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "save dns mode";
+    }
+    _dnsModeLastLoad = 0;
+    setTimeout(loadDnsModeStatus, 800);
+  }
+}
+
+async function loadStalePeers() {
+  const days = document.getElementById("stale-days").value;
+  const status = document.getElementById("stale-status");
+  const list = document.getElementById("stale-list");
+  if (status) status.textContent = "checking stale peers…";
+  if (list) list.innerHTML = "";
+  try {
+    const d = await API.get(`/api/peers/stale?days=${encodeURIComponent(days)}`);
+    renderStalePeers(d);
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "review failed";
+  }
+}
+
+function renderStalePeers(d) {
+  const status = document.getElementById("stale-status");
+  const list = document.getElementById("stale-list");
+  const peers = d.peers || [];
+  if (status) status.textContent = `${peers.length} peer(s) inactive for ${d.days} days`;
+  if (!list) return;
+  if (!peers.length) {
+    list.innerHTML = '<p class="empty-state">no stale peers</p>';
+    return;
+  }
+  list.innerHTML = peers.map((p) => {
+    const label = p.label || p.public_key_short || p.public_key.slice(0, 16) + "…";
+    const ip = p.allowed_ips || "—";
+    const age = _formatAgeBrief(p.stale_age_seconds || 0);
+    return `
+      <label class="stale-peer-row">
+        <input type="checkbox" value="${p.public_key}" />
+        <span>${label}</span>
+        <strong>${ip}</strong>
+        <em>${age}</em>
+      </label>`;
+  }).join("");
+}
+
+async function removeSelectedStalePeers() {
+  const keys = [...document.querySelectorAll("#stale-list input[type='checkbox']:checked")].map((el) => el.value);
+  const days = Number(document.getElementById("stale-days").value);
+  const status = document.getElementById("stale-status");
+  if (!keys.length) {
+    if (status) status.textContent = "select stale peers to remove";
+    return;
+  }
+  if (!confirmRisk(`Remove ${keys.length} stale peer(s)?`, [
+    "Selected peers will be removed from the live VPN interface and persisted config.",
+    "This does not remove the admin/bootstrap peer.",
+  ])) return;
+  if (status) status.textContent = "removing selected peers…";
+  try {
+    await API.post("/api/peers/stale/remove", { public_keys: keys, days });
+    loadStalePeers();
+    loadPeers();
+    loadOverview();
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "remove failed";
+  }
+}
+
+async function loadProvisioningDefaults() {
+  try {
+    const d = await API.get("/api/system/provisioning-defaults");
+    renderProvisioningDefaults(d.defaults || {});
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      const status = document.getElementById("prov-defaults-status");
+      if (status) status.textContent = "defaults unavailable";
+    }
+  }
+}
+
+function renderProvisioningDefaults(d) {
+  _lastProvisioningDefaults = { ...d };
+  document.getElementById("prov-label-prefix").value = d.label_prefix || "";
+  document.getElementById("prov-keepalive").value = d.persistent_keepalive ?? "";
+  document.getElementById("prov-mtu").value = d.mtu ?? "";
+  document.getElementById("prov-dns-enabled").checked = d.dns_enabled !== false;
+  const summary = provisioningDefaultsSummary(d);
+  document.getElementById("prov-defaults-status").textContent = "applies to newly provisioned peers";
+  const summaryEl = document.getElementById("prov-defaults-summary");
+  if (summaryEl) summaryEl.textContent = `current: ${summary}`;
+  updateNetworkPresetState(d);
+}
+
+async function saveProvisioningDefaults() {
+  const status = document.getElementById("prov-defaults-status");
+  const btn = document.getElementById("prov-defaults-save");
+  const keepaliveRaw = document.getElementById("prov-keepalive").value.trim();
+  const mtuRaw = document.getElementById("prov-mtu").value.trim();
+  const payload = {
+    label_prefix: document.getElementById("prov-label-prefix").value.trim(),
+    dns_enabled: document.getElementById("prov-dns-enabled").checked,
+    persistent_keepalive: keepaliveRaw === "" ? null : Number(keepaliveRaw),
+    mtu: mtuRaw === "" ? null : Number(mtuRaw),
+  };
+  if (!confirmRisk("Save provisioning defaults?", [
+    provisioningDefaultsSummary(payload),
+    "Only newly provisioned peers will use these values.",
+  ])) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "saving…";
+  }
+  if (status) status.textContent = "saving defaults…";
+  try {
+    const d = await API.post("/api/system/provisioning-defaults", payload);
+    renderProvisioningDefaults(d.defaults || {});
+    if (status) status.textContent = "defaults saved";
+  } catch (e) {
+    if (e.message !== "unauthorized" && status) status.textContent = "save failed";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "save defaults";
+    }
+    _provisionDefaultsLastLoad = 0;
+  }
+}
+
+async function loadDnsPrivacyStatus() {
+  try {
+    const d = await API.get("/api/system/dns-privacy");
+    renderDnsPrivacy(d);
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      const status = document.getElementById("dns-privacy-status");
+      if (status) status.textContent = "status unavailable";
+    }
+  }
+}
+
+function renderDnsPrivacy(d) {
+  const toggle = document.getElementById("dns-privacy-toggle");
+  const status = document.getElementById("dns-privacy-status");
+  const msg = document.getElementById("dns-privacy-msg");
+  if (!toggle || !status) return;
+
+  toggle.checked = !!d.enabled;
+  toggle.disabled = _dnsPrivacyBusy;
+
+  const cacheEntries = d.cache_entries ?? "—";
+  const ttl = d.cache_max_ttl ? _formatTTL(d.cache_max_ttl) : "—";
+  const logging = d.query_logging ? "query logs on" : "query logs off";
+  const autoFlush = d.auto_flush ? "auto flush on" : "auto flush off";
+  status.textContent = `${logging} · cache ${cacheEntries} · ttl ${ttl} · ${autoFlush}`;
+
+  if (msg && !_dnsPrivacyBusy) {
+    msg.textContent = d.enabled
+      ? "short TTL, no prefetch, flushes every 15m"
+      : "standard resolver cache policy";
+  }
+}
+
+function _formatTTL(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
+}
+
+function _formatAgeBrief(seconds) {
+  if (!seconds) return "—";
+  if (seconds < 86400) return _formatTTL(seconds);
+  const days = Math.floor(seconds / 86400);
+  if (days < 365) return `${days}d`;
+  return `${Math.floor(days / 365)}y`;
+}
+
+async function setDnsPrivacy(enabled) {
+  const toggle = document.getElementById("dns-privacy-toggle");
+  const msg = document.getElementById("dns-privacy-msg");
+  if (!confirmRisk(`${enabled ? "Enable" : "Disable"} DNS privacy mode?`, [
+    enabled
+      ? "This lowers resolver cache retention and enables scheduled cache flushes."
+      : "This restores the standard resolver cache policy.",
+    "Unbound settings will be validated and restarted if needed.",
+  ])) {
+    if (toggle) toggle.checked = !enabled;
+    return;
+  }
+  _dnsPrivacyBusy = true;
+  if (toggle) toggle.disabled = true;
+  if (msg) msg.textContent = enabled ? "enabling privacy mode…" : "disabling privacy mode…";
+
+  try {
+    const d = await API.post("/api/system/dns-privacy", { enabled });
+    renderDnsPrivacy(d);
+  } catch (e) {
+    if (e.message !== "unauthorized") {
+      if (msg) msg.textContent = "update failed";
+      if (toggle) toggle.checked = !enabled;
+    }
+  } finally {
+    _dnsPrivacyBusy = false;
+    if (toggle) toggle.disabled = false;
+    _dnsPrivacyLastLoad = 0;
+    loadDnsPrivacyStatus();
+  }
+}
+
+async function flushDnsPrivacyNow() {
+  const btn = document.getElementById("dns-privacy-flush-btn");
+  const msg = document.getElementById("dns-privacy-msg");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "flushing…";
+  }
+  if (msg) msg.textContent = "clearing resolver cache…";
+
+  try {
+    const d = await API.post("/api/system/dns-privacy/flush", {});
+    renderDnsPrivacy(d);
+    if (msg) msg.textContent = "cache flushed";
+  } catch (e) {
+    if (e.message !== "unauthorized" && msg) msg.textContent = "flush failed";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "flush now";
+    }
+    _dnsPrivacyLastLoad = 0;
+    setTimeout(loadDnsPrivacyStatus, 800);
+  }
+}
+
 document.getElementById("perf-refresh-btn").addEventListener("click", () => {
   _perfTimestamp = 0; // reset to force instant new calculation reading
+  _dnsPrivacyLastLoad = 0;
+  _operationsLastLoad = 0;
+  _dnsModeLastLoad = 0;
+  _provisionDefaultsLastLoad = 0;
+  _accessControlLastLoad = 0;
   document.getElementById("perf-rx-speed").textContent = "—";
   document.getElementById("perf-tx-speed").textContent = "—";
   loadPerformance();
 });
+
+document.getElementById("dns-privacy-toggle").addEventListener("change", (e) => {
+  setDnsPrivacy(e.target.checked);
+});
+
+document.getElementById("dns-privacy-flush-btn").addEventListener("click", flushDnsPrivacyNow);
+
+document.getElementById("ops-restart-vpn").addEventListener("click", () => runOperationsAction("restart-vpn"));
+document.getElementById("ops-restart-dns").addEventListener("click", () => runOperationsAction("restart-dns"));
+document.getElementById("ops-restart-api").addEventListener("click", () => runOperationsAction("restart-api"));
+document.getElementById("dns-mode-save").addEventListener("click", saveDnsMode);
+document.getElementById("stale-refresh").addEventListener("click", loadStalePeers);
+document.getElementById("stale-remove").addEventListener("click", removeSelectedStalePeers);
+document.getElementById("stale-days").addEventListener("change", loadStalePeers);
+document.getElementById("prov-defaults-save").addEventListener("click", saveProvisioningDefaults);
+document.getElementById("access-rotate-token").addEventListener("click", rotateAccessToken);
+document.getElementById("logging-profile-save").addEventListener("click", saveLoggingProfile);
+document.getElementById("f2b-unban-btn").addEventListener("click", unbanFail2banIp);
+document.getElementById("f2b-restart-btn").addEventListener("click", restartFail2ban);
+document.getElementById("f2b-policy-save").addEventListener("click", saveFail2banPolicy);
+document.getElementById("net-preset-default").addEventListener("click", () => applyNetworkPreset("default"));
+document.getElementById("net-preset-mobile").addEventListener("click", () => applyNetworkPreset("mobile"));
+document.getElementById("net-preset-conservative").addEventListener("click", () => applyNetworkPreset("conservative"));
+document.getElementById("maint-flush-dns").addEventListener("click", () => runMaintenanceAction("flush-dns"));
+document.getElementById("maint-save-iptables").addEventListener("click", () => runMaintenanceAction("save-iptables"));
+document.getElementById("maint-dkms-check").addEventListener("click", () => runMaintenanceAction("dkms-check"));
+document.getElementById("maint-restart-vpn").addEventListener("click", () => runMaintenanceAction("restart-vpn"));
+document.getElementById("maint-restart-dns").addEventListener("click", () => runMaintenanceAction("restart-dns"));
+document.getElementById("maint-restart-api").addEventListener("click", () => runMaintenanceAction("restart-api"));
 
 function startPerformanceAutoRefresh() {
   clearInterval(_performanceInterval);

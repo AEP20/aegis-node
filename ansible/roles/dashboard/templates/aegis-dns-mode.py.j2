@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+UNBOUND_CONF = Path("/etc/unbound/unbound.conf")
+
+PRESETS = {
+    "cloudflare": {
+        "label": "Cloudflare",
+        "tls_name": "cloudflare-dns.com",
+        "addrs": ["1.1.1.1", "1.0.0.1"],
+    },
+    "quad9": {
+        "label": "Quad9",
+        "tls_name": "dns.quad9.net",
+        "addrs": ["9.9.9.9", "149.112.112.112"],
+    },
+    "google": {
+        "label": "Google",
+        "tls_name": "dns.google",
+        "addrs": ["8.8.8.8", "8.8.4.4"],
+    },
+}
+
+
+def run(cmd, check=True):
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
+def read_config():
+    if not UNBOUND_CONF.exists():
+        raise RuntimeError(f"{UNBOUND_CONF} does not exist")
+    return UNBOUND_CONF.read_text()
+
+
+def forward_block(dot_enabled, preset):
+    lines = ["forward-zone:", '    name: "."']
+    if dot_enabled:
+        lines.append("    forward-tls-upstream: yes")
+        for addr in preset["addrs"]:
+            lines.append(f"    forward-addr: {addr}@853#{preset['tls_name']}")
+    else:
+        for addr in preset["addrs"]:
+            lines.append(f"    forward-addr: {addr}")
+    return "\n".join(lines) + "\n"
+
+
+def replace_forward_zone(text, block):
+    match = re.search(r"^forward-zone:\n(?:^[ \t]+.*\n?)*", text, re.MULTILINE)
+    if match:
+        return text[:match.start()] + block + text[match.end():]
+    return text.rstrip() + "\n\n" + block
+
+
+def parse_status():
+    text = read_config()
+    dot_enabled = bool(re.search(r"^\s*forward-tls-upstream:\s*yes\b", text, re.MULTILINE))
+    addrs = re.findall(r"^\s*forward-addr:\s*(\S+)", text, re.MULTILINE)
+    preset_name = "custom"
+    for name, preset in PRESETS.items():
+        expected = [
+            f"{addr}@853#{preset['tls_name']}" if dot_enabled else addr
+            for addr in preset["addrs"]
+        ]
+        if addrs == expected:
+            preset_name = name
+            break
+    return {
+        "status": "ok",
+        "preset": preset_name,
+        "preset_label": PRESETS.get(preset_name, {}).get("label", "Custom"),
+        "dot_enabled": dot_enabled,
+        "forward_addrs": addrs,
+        "presets": {k: v["label"] for k, v in PRESETS.items()},
+    }
+
+
+def set_mode(preset_name, dot_enabled):
+    preset = PRESETS[preset_name]
+    original = read_config()
+    updated = replace_forward_zone(original, forward_block(dot_enabled, preset))
+    try:
+        UNBOUND_CONF.write_text(updated)
+        if Path("/usr/sbin/unbound-checkconf").exists():
+            run(["/usr/sbin/unbound-checkconf", str(UNBOUND_CONF)])
+        run(["systemctl", "restart", "unbound"])
+    except Exception:
+        UNBOUND_CONF.write_text(original)
+        run(["systemctl", "restart", "unbound"], check=False)
+        raise
+    return parse_status()
+
+
+def main():
+    actions = {"status"}
+    for preset in PRESETS:
+        actions.add(f"set-{preset}-dot")
+        actions.add(f"set-{preset}-plain")
+    if len(sys.argv) != 2 or sys.argv[1] not in actions:
+        print("usage: aegis-dns-mode status|set-cloudflare-dot|set-cloudflare-plain|set-quad9-dot|...", file=sys.stderr)
+        return 2
+
+    action = sys.argv[1]
+    try:
+        if action == "status":
+            payload = parse_status()
+        else:
+            _, preset, mode = action.split("-", 2)
+            payload = set_mode(preset, mode == "dot")
+    except Exception as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    print(json.dumps(payload))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

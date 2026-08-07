@@ -53,7 +53,7 @@
           <span class="nav-icon">◎</span> monitor
         </button>
         <button class="nav-item" data-tab="performance">
-          <span class="nav-icon">◬</span> performance
+          <span class="nav-icon">◬</span> operations
         </button>
       </nav>
 
@@ -273,6 +273,7 @@
         <div class="card">
           <p class="card-title">ssh login timeline — last 7 days</p>
           <div id="mon-timeline" class="ssh-timeline"></div>
+          <div id="mon-timeline-detail" class="timeline-detail hidden"></div>
         </div>
 
         <!-- SSH Activity -->
@@ -310,10 +311,11 @@
       <!-- Performance tab -->
       <section id="tab-performance" class="tab hidden">
         <header class="page-header">
-          <h1>Performance</h1>
+          <h1>Operations</h1>
           <button id="perf-refresh-btn" class="btn btn-secondary">↻ refresh</button>
         </header>
 
+        <p class="section-label">Performance</p>
         <div class="cards-row">
           <div class="card stat-card perf-card">
             <p class="stat-label">Active Users</p>
@@ -348,6 +350,247 @@
               <span class="tp-label">↑ Upload (TX)</span>
               <span id="perf-tx-speed" class="tp-speed mono">—</span>
             </div>
+          </div>
+        </div>
+
+        <p class="section-label">Network Tuning</p>
+        <div class="ops-grid">
+          <div class="card ops-card net-presets-card">
+            <div class="ops-card-head">
+              <p class="card-title">Interface Runtime</p>
+              <span id="net-tuning-badge" class="badge badge-idle">checking</span>
+            </div>
+            <p id="net-tuning-status" class="ops-status">loading…</p>
+            <div class="ops-kv">
+              <span>interface mtu</span><strong id="net-current-mtu">—</strong>
+              <span>listen port</span><strong id="net-listen-port">—</strong>
+              <span>drops</span><strong id="net-drops">—</strong>
+            </div>
+          </div>
+
+          <div class="card ops-card">
+            <div class="ops-card-head">
+              <p class="card-title">Provisioning Presets</p>
+              <span id="net-preset-badge" class="badge badge-idle">loading</span>
+            </div>
+            <p id="net-preset-status" class="ops-status">applies to newly provisioned peers only</p>
+            <div class="ops-actions">
+              <button id="net-preset-default" class="btn btn-secondary btn-small">default</button>
+              <button id="net-preset-mobile" class="btn btn-secondary btn-small">mobile</button>
+              <button id="net-preset-conservative" class="btn btn-secondary btn-small">conservative</button>
+            </div>
+            <p class="dns-privacy-msg card-note">live interface changes are intentionally not automatic</p>
+          </div>
+        </div>
+
+        <p class="section-label">Maintenance</p>
+        <div class="ops-grid">
+          <div class="card ops-card">
+            <p class="card-title">Update &amp; Reboot</p>
+            <p id="ops-reboot-status" class="ops-status">loading…</p>
+            <div class="ops-kv">
+              <span>running kernel</span><strong id="ops-running-kernel">—</strong>
+              <span>next boot</span><strong id="ops-next-boot">—</strong>
+              <span>preflight</span><strong id="ops-preflight">—</strong>
+            </div>
+          </div>
+
+          <div class="card ops-card">
+            <div class="ops-card-head">
+              <p class="card-title">VPN Service Guard</p>
+              <span id="ops-vpn-badge" class="badge badge-idle">checking</span>
+            </div>
+            <p id="ops-vpn-status" class="ops-status">loading…</p>
+            <div class="ops-actions">
+              <button id="ops-restart-vpn" class="btn btn-secondary btn-small">restart vpn</button>
+              <button id="ops-restart-dns" class="btn btn-secondary btn-small">restart dns</button>
+              <button id="ops-restart-api" class="btn btn-secondary btn-small">restart api</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card dns-mode-card maintenance-card">
+          <div class="ops-card-head">
+            <p class="card-title">Advanced Maintenance</p>
+            <span id="maintenance-badge" class="badge badge-idle">ready</span>
+          </div>
+          <p id="maintenance-status" class="ops-status">no action run</p>
+          <p class="risk-note card-note">service restarts and persistence actions ask for confirmation before running</p>
+          <div class="ops-actions">
+            <button id="maint-flush-dns" class="btn btn-secondary btn-small">flush dns</button>
+            <button id="maint-save-iptables" class="btn btn-warning btn-small">save iptables</button>
+            <button id="maint-dkms-check" class="btn btn-secondary btn-small">dkms check</button>
+            <button id="maint-restart-vpn" class="btn btn-warning btn-small">restart vpn</button>
+            <button id="maint-restart-dns" class="btn btn-warning btn-small">restart dns</button>
+            <button id="maint-restart-api" class="btn btn-warning btn-small">restart api</button>
+          </div>
+        </div>
+
+        <p class="section-label">Security</p>
+        <div class="ops-grid">
+          <div class="card ops-card fail2ban-card">
+            <div class="ops-card-head">
+              <p class="card-title">Access Control</p>
+              <span id="access-auth-badge" class="badge badge-idle">checking</span>
+            </div>
+            <p id="access-status" class="ops-status">loading…</p>
+            <div class="ops-kv">
+              <span>bind</span><strong id="access-bind">—</strong>
+              <span>token age</span><strong id="access-token-age">—</strong>
+              <span>warning</span><strong id="access-warning">—</strong>
+            </div>
+            <div class="dns-privacy-actions">
+              <button id="access-rotate-token" class="btn btn-danger btn-small">rotate token</button>
+              <span id="access-token-output" class="dns-privacy-msg">new token is shown once</span>
+            </div>
+          </div>
+
+          <div class="card ops-card">
+            <div class="ops-card-head">
+              <p class="card-title">Fail2ban Controls</p>
+              <span id="f2b-ops-badge" class="badge badge-idle">checking</span>
+            </div>
+            <p id="f2b-ops-status" class="ops-status">loading…</p>
+            <div id="f2b-ops-jails" class="stale-list"></div>
+            <div class="policy-grid">
+              <label class="settings-field">
+                <span>max retry</span>
+                <input id="f2b-policy-maxretry" type="text" placeholder="5" />
+              </label>
+              <label class="settings-field">
+                <span>findtime sec</span>
+                <input id="f2b-policy-findtime" type="text" placeholder="600" />
+              </label>
+              <label class="settings-field">
+                <span>ban sec</span>
+                <input id="f2b-policy-bantime" type="text" placeholder="3600" />
+              </label>
+              <label class="settings-field">
+                <span>repeat ban sec</span>
+                <input id="f2b-policy-recidive" type="text" placeholder="604800" />
+              </label>
+            </div>
+            <div class="dns-privacy-actions policy-actions">
+              <button id="f2b-policy-save" class="btn btn-warning btn-small">save policy</button>
+              <span id="f2b-policy-status" class="dns-privacy-msg">current live policy</span>
+            </div>
+            <div class="settings-row compact unban-row">
+              <label class="settings-field">
+                <span>unban ip</span>
+                <input id="f2b-unban-ip" type="text" placeholder="203.0.113.10" />
+              </label>
+              <button id="f2b-unban-btn" class="btn btn-secondary btn-small">unban</button>
+              <button id="f2b-restart-btn" class="btn btn-secondary btn-small">restart</button>
+            </div>
+          </div>
+        </div>
+
+        <p class="section-label">Privacy</p>
+        <div class="card dns-privacy-card">
+          <div class="dns-privacy-head">
+            <div>
+              <p class="card-title">DNS Privacy</p>
+              <p id="dns-privacy-status" class="dns-privacy-status">loading…</p>
+            </div>
+            <label class="toggle-row" for="dns-privacy-toggle">
+              <span id="dns-privacy-toggle-label" class="toggle-label">privacy mode</span>
+              <input id="dns-privacy-toggle" class="toggle-input" type="checkbox" />
+              <span class="toggle-ui"></span>
+            </label>
+          </div>
+          <div class="dns-privacy-actions">
+            <button id="dns-privacy-flush-btn" class="btn btn-secondary btn-small">flush now</button>
+            <span id="dns-privacy-msg" class="dns-privacy-msg">resolver cache metadata only</span>
+          </div>
+        </div>
+
+        <div class="card dns-mode-card">
+          <p class="card-title">DNS Mode</p>
+          <div class="settings-row">
+            <label class="settings-field">
+              <span>upstream</span>
+              <select id="dns-mode-preset" class="select-input">
+                <option value="cloudflare">Cloudflare</option>
+                <option value="quad9">Quad9</option>
+                <option value="google">Google</option>
+              </select>
+            </label>
+            <label class="toggle-row" for="dns-mode-dot">
+              <span class="toggle-label">DNS-over-TLS</span>
+              <input id="dns-mode-dot" class="toggle-input" type="checkbox" />
+              <span class="toggle-ui"></span>
+            </label>
+            <button id="dns-mode-save" class="btn btn-secondary btn-small">save dns mode</button>
+          </div>
+          <p id="dns-mode-status" class="dns-privacy-status">loading…</p>
+          <p class="risk-note">saving rewrites Unbound upstream config and restarts DNS</p>
+        </div>
+
+        <div class="card dns-mode-card">
+          <div class="ops-card-head">
+            <p class="card-title">Local Logging</p>
+            <span id="logging-profile-badge" class="badge badge-idle">checking</span>
+          </div>
+          <div class="settings-row">
+            <label class="settings-field">
+              <span>profile</span>
+              <select id="logging-profile" class="select-input">
+                <option value="standard">Standard</option>
+                <option value="minimal">Minimal</option>
+              </select>
+            </label>
+            <button id="logging-profile-save" class="btn btn-warning btn-small">save profile</button>
+          </div>
+          <p id="logging-profile-status" class="dns-privacy-status">loading…</p>
+          <p class="dns-privacy-msg">local operational logs only; provider-side metadata is outside this control</p>
+        </div>
+
+        <p class="section-label">Peer Policy</p>
+        <div class="ops-grid">
+          <div class="card ops-card provisioning-defaults-card">
+            <p class="card-title">Stale Peer Cleanup</p>
+            <div class="settings-row compact">
+              <label class="settings-field">
+                <span>inactive for</span>
+                <select id="stale-days" class="select-input">
+                  <option value="30">30 days</option>
+                  <option value="60">60 days</option>
+                  <option value="90" selected>90 days</option>
+                </select>
+              </label>
+              <button id="stale-refresh" class="btn btn-secondary btn-small">review</button>
+              <button id="stale-remove" class="btn btn-danger btn-small">remove selected</button>
+            </div>
+            <p id="stale-status" class="ops-status">no review loaded</p>
+            <div id="stale-list" class="stale-list"></div>
+          </div>
+
+          <div class="card ops-card">
+            <p class="card-title">Provisioning Defaults</p>
+            <div class="provision-defaults-grid">
+              <label class="settings-field">
+                <span>label prefix</span>
+                <input id="prov-label-prefix" type="text" placeholder="phone" maxlength="32" />
+              </label>
+              <label class="settings-field">
+                <span>keepalive</span>
+                <input id="prov-keepalive" type="text" placeholder="25" />
+              </label>
+              <label class="settings-field">
+                <span>mtu</span>
+                <input id="prov-mtu" type="text" placeholder="auto" />
+              </label>
+              <label class="toggle-row prov-dns-toggle" for="prov-dns-enabled">
+                <span class="toggle-label">include DNS</span>
+                <input id="prov-dns-enabled" class="toggle-input" type="checkbox" />
+                <span class="toggle-ui"></span>
+              </label>
+            </div>
+            <div class="dns-privacy-actions">
+              <button id="prov-defaults-save" class="btn btn-secondary btn-small">save defaults</button>
+              <span id="prov-defaults-status" class="dns-privacy-msg">loading…</span>
+            </div>
+            <p id="prov-defaults-summary" class="default-summary">current defaults loading…</p>
           </div>
         </div>
       </section>

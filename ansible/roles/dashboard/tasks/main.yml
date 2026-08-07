@@ -42,6 +42,33 @@
     mode: "0644"
   become: true
 
+- name: Deploy DNS privacy helper
+  template:
+    src: aegis-dns-privacy.py.j2
+    dest: /usr/local/sbin/aegis-dns-privacy
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Deploy node operations helper
+  template:
+    src: aegis-node-ops.py.j2
+    dest: /usr/local/sbin/aegis-node-ops
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Deploy DNS mode helper
+  template:
+    src: aegis-dns-mode.py.j2
+    dest: /usr/local/sbin/aegis-dns-mode
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
 
 - name: Create Python virtual environment (as aegis)
   command: python3 -m venv {{ dashboard_venv_dir }}
@@ -77,7 +104,7 @@
   copy:
     dest: /etc/sudoers.d/aegis-wg
     content: |
-      {{ aegis_system_user }} ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/awg, /usr/bin/tee, /usr/bin/tail, /bin/cat, /usr/bin/fail2ban-client{% if dashboard_allow_reboot %}, /usr/sbin/shutdown{% endif %}
+      {{ aegis_system_user }} ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/awg, /usr/bin/tee, /usr/bin/tail, /bin/cat, /usr/bin/fail2ban-client, /usr/local/sbin/aegis-dns-privacy status, /usr/local/sbin/aegis-dns-privacy enable, /usr/local/sbin/aegis-dns-privacy disable, /usr/local/sbin/aegis-dns-privacy flush, /usr/local/sbin/aegis-node-ops status, /usr/local/sbin/aegis-node-ops restart-vpn, /usr/local/sbin/aegis-node-ops restart-api, /usr/local/sbin/aegis-node-ops restart-dns, /usr/local/sbin/aegis-node-ops logging-standard, /usr/local/sbin/aegis-node-ops logging-minimal, /usr/local/sbin/aegis-node-ops restart-fail2ban, /usr/local/sbin/aegis-node-ops fail2ban-unban *, /usr/local/sbin/aegis-node-ops fail2ban-policy-set *, /usr/local/sbin/aegis-node-ops dkms-check, /usr/local/sbin/aegis-node-ops save-iptables, /usr/local/sbin/aegis-dns-mode status, /usr/local/sbin/aegis-dns-mode set-cloudflare-dot, /usr/local/sbin/aegis-dns-mode set-cloudflare-plain, /usr/local/sbin/aegis-dns-mode set-quad9-dot, /usr/local/sbin/aegis-dns-mode set-quad9-plain, /usr/local/sbin/aegis-dns-mode set-google-dot, /usr/local/sbin/aegis-dns-mode set-google-plain{% if dashboard_allow_reboot %}, /usr/sbin/shutdown{% endif %}
 
     owner: root
     group: root
@@ -93,6 +120,16 @@
     group: "{{ aegis_system_user }}"
     mode: "0644"
     remote_src: yes
+  become: true
+
+- name: Initialize dashboard auth token file
+  copy:
+    content: "{{ dashboard_auth_token }}\n"
+    dest: "{{ dashboard_app_dir }}/dashboard_token"
+    owner: "{{ aegis_system_user }}"
+    group: "{{ aegis_system_user }}"
+    mode: "0600"
+    force: false
   become: true
 
 - name: Deploy systemd service

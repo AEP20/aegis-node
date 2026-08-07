@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+import json
+import os
+import ipaddress
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+VPN_CANDIDATES = [
+    {"transport": "amneziawg", "label": "AmneziaWG", "service": "awg-quick@awg0", "interface": "awg0", "cli": "awg", "module": "amneziawg"},
+    {"transport": "wireguard", "label": "WireGuard", "service": "wg-quick@wg0", "interface": "wg0", "cli": "wg", "module": "wireguard"},
+]
+
+KNOWN_SERVICES = {
+    "api": "aegis-api",
+    "dns": "unbound",
+    "fail2ban": "fail2ban",
+}
+
+LOGGING_PROFILE_FILE = Path("/etc/aegis/logging-profile")
+JOURNALD_CONF = Path("/etc/systemd/journald.conf.d/aegis-logging.conf")
+AUTH_LOGROTATE = Path("/etc/logrotate.d/aegis-auth")
+FAIL2BAN_LOGROTATE = Path("/etc/logrotate.d/aegis-fail2ban")
+FAIL2BAN_POLICY_OVERRIDE = Path("/etc/fail2ban/jail.d/aegis-control-plane.local")
+
+
+def run(cmd, check=False, timeout=8):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, check=check, timeout=timeout)
+    except FileNotFoundError as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
+
+
+def unit_state(name):
+    active = run(["systemctl", "is-active", name]).stdout.strip() or "unknown"
+    enabled_result = run(["systemctl", "is-enabled", name])
+    enabled = enabled_result.stdout.strip() or "unknown"
+    return {"name": name, "active": active, "enabled": enabled}
+
+
+def version_sort(values):
+    if not values:
+        return []
+    try:
+        result = subprocess.run(["sort", "-V"], input="\n".join(values) + "\n", capture_output=True, text=True, timeout=5)
+        return [line for line in result.stdout.splitlines() if line]
+    except Exception:
+        return sorted(values)
+
+
+def installed_kernels():
+    kernels = []
+    modules_dir = Path("/lib/modules")
+    if modules_dir.exists():
+        kernels = [p.name for p in modules_dir.iterdir() if p.is_dir()]
+    return version_sort(kernels)
+
+
+def pick_vpn():
+    states = []
+    for candidate in VPN_CANDIDATES:
+        state = unit_state(candidate["service"])
+        states.append({**candidate, **state})
+
+    active = next((s for s in states if s["active"] == "active"), None)
+    if active:
+        return active, states
+
+    enabled = next((s for s in states if s["enabled"] == "enabled"), None)
+    if enabled:
+        return enabled, states
+
+    return states[0], states
+
+
+def module_ready(module, kernel):
+    result = run(["modinfo", "-k", kernel, module])
+    return result.returncode == 0
+
+
+def headers_installed(kernel):
+    return Path(f"/usr/src/linux-headers-{kernel}").exists() and Path(f"/usr/src/linux-headers-{kernel}-generic").exists()
+
+
+def ip_link_exists(interface):
+    return run(["ip", "link", "show", interface]).returncode == 0
+
+
+def interface_address(interface):
+    result = run(["ip", "-4", "addr", "show", interface])
+    if result.returncode != 0:
+        return None
+    match = re.search(r"\binet\s+([0-9.]+/\d+)", result.stdout)
+    return match.group(1) if match else None
+
+
+def interface_mtu(interface):
+    result = run(["ip", "-o", "link", "show", interface])
+    if result.returncode != 0:
+        return None
+    match = re.search(r"\bmtu\s+(\d+)\b", result.stdout)
+    return int(match.group(1)) if match else None
+
+
+def interface_drops(interface):
+    result = run(["ip", "-s", "link", "show", interface])
+    drops = {"rx": None, "tx": None}
+    if result.returncode != 0:
+        return drops
+    lines = result.stdout.splitlines()
+    for idx, line in enumerate(lines):
+        if line.strip().startswith("RX:") and idx + 1 < len(lines):
+            parts = lines[idx + 1].split()
+            if len(parts) > 3:
+                try:
+                    drops["rx"] = int(parts[3])
+                except ValueError:
+                    pass
+        elif line.strip().startswith("TX:") and idx + 1 < len(lines):
+            parts = lines[idx + 1].split()
+            if len(parts) > 3:
+                try:
+                    drops["tx"] = int(parts[3])
+                except ValueError:
+                    pass
+    return drops
+
+
+def vpn_runtime(candidate):
+    cli = candidate["cli"]
+    interface = candidate["interface"]
+    runtime = {
+        "interface_up": ip_link_exists(interface),
+        "address": interface_address(interface),
+        "listen_port": None,
+        "peer_count": None,
+        "latest_handshake": None,
+    }
+
+    if not shutil_which(cli):
+        return runtime
+
+    port = run([cli, "show", interface, "listen-port"])
+    if port.returncode == 0 and port.stdout.strip().isdigit():
+        runtime["listen_port"] = int(port.stdout.strip())
+
+    dump = run([cli, "show", interface, "dump"])
+    if dump.returncode == 0:
+        peers = [line.split("\t") for line in dump.stdout.splitlines()[1:] if line.strip()]
+        runtime["peer_count"] = len(peers)
+        handshakes = []
+        for parts in peers:
+            if len(parts) > 5:
+                try:
+                    ts = int(parts[5])
+                    if ts > 0:
+                        handshakes.append(ts)
+                except ValueError:
+                    pass
+        runtime["latest_handshake"] = max(handshakes) if handshakes else None
+
+    return runtime
+
+
+def network_tuning_status(vpn=None):
+    vpn = vpn or pick_vpn()[0]
+    runtime = vpn_runtime(vpn)
+    interface = vpn["interface"]
+    drops = interface_drops(interface)
+    return {
+        "status": "ok",
+        "interface": interface,
+        "listen_port": runtime.get("listen_port"),
+        "mtu": interface_mtu(interface),
+        "drops": drops,
+        "presets": {
+            "default": {"mtu": None, "persistent_keepalive": 25},
+            "mobile": {"mtu": 1280, "persistent_keepalive": 25},
+            "conservative": {"mtu": 1360, "persistent_keepalive": 25},
+        },
+    }
+
+
+def shutil_which(name):
+    for directory in os.environ.get("PATH", "/usr/sbin:/usr/bin:/sbin:/bin").split(":"):
+        path = Path(directory) / name
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
+def dkms_status(module):
+    result = run(["dkms", "status"])
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if module in line]
+
+
+def _read_profile():
+    try:
+        value = LOGGING_PROFILE_FILE.read_text().strip()
+        if value in {"standard", "minimal"}:
+            return value
+    except OSError:
+        pass
+    return "standard"
+
+
+def _write(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+
+
+def _dns_query_logging_enabled():
+    conf = Path("/etc/unbound/unbound.conf")
+    try:
+        text = conf.read_text()
+    except OSError:
+        return False
+    return bool(re.search(r"^\s*log-(?:queries|replies):\s*yes\b", text, re.MULTILINE))
+
+
+def _traffic_logging_rule_count():
+    result = run(["iptables-save"], timeout=5)
+    if result.returncode != 0:
+        return None
+    return len(re.findall(r"\s-j\s+(?:LOG|NFLOG|ULOG)\b", result.stdout))
+
+
+def logging_status():
+    return {
+        "status": "ok",
+        "profile": _read_profile(),
+        "journald_configured": JOURNALD_CONF.exists(),
+        "auth_logrotate": AUTH_LOGROTATE.exists(),
+        "fail2ban_logrotate": FAIL2BAN_LOGROTATE.exists(),
+        "dns_query_logging": _dns_query_logging_enabled(),
+        "traffic_logging_rules": _traffic_logging_rule_count(),
+    }
+
+
+def set_logging_profile(profile):
+    if profile == "minimal":
+        _write(JOURNALD_CONF, """[Journal]
+SystemMaxUse=50M
+RuntimeMaxUse=20M
+MaxRetentionSec=1week
+Compress=yes
+""")
+        _write(AUTH_LOGROTATE, """# Managed by Aegis Control Plane
+/var/log/auth.log {
+    daily
+    rotate 2
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        systemctl reload rsyslog 2>/dev/null || true
+    endscript
+}
+""")
+        _write(FAIL2BAN_LOGROTATE, """# Managed by Aegis Control Plane
+/var/log/fail2ban.log {
+    daily
+    rotate 2
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+""")
+    elif profile == "standard":
+        if JOURNALD_CONF.exists():
+            JOURNALD_CONF.unlink()
+        _write(AUTH_LOGROTATE, """# Managed by Aegis Control Plane
+/var/log/auth.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        systemctl reload rsyslog 2>/dev/null || true
+    endscript
+}
+""")
+        _write(FAIL2BAN_LOGROTATE, """# Managed by Aegis Control Plane
+/var/log/fail2ban.log {
+    weekly
+    rotate 4
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+""")
+    else:
+        raise ValueError(f"unsupported logging profile: {profile}")
+
+    LOGGING_PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOGGING_PROFILE_FILE.write_text(profile + "\n")
+    run(["systemctl", "restart", "systemd-journald"], check=False, timeout=8)
+    run(["systemctl", "reload", "rsyslog"], check=False, timeout=8)
+    return logging_status()
+
+
+def _fail2ban_jail_status(jail):
+    payload = {"jail": jail, "available": False, "currently_banned": 0, "banned": []}
+    result = run(["fail2ban-client", "status", jail], timeout=8)
+    if result.returncode != 0:
+        return payload
+    payload["available"] = True
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if "Currently banned:" in line:
+            try:
+                payload["currently_banned"] = int(line.rsplit(":", 1)[-1].strip())
+            except ValueError:
+                pass
+        elif "Banned IP list:" in line:
+            ips = line.rsplit(":", 1)[-1].strip()
+            payload["banned"] = [ip for ip in ips.split() if ip]
+    return payload
+
+
+def _fail2ban_get(jail, key):
+    result = run(["fail2ban-client", "get", jail, key], timeout=8)
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip().splitlines()[-1].strip()
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def fail2ban_policy_status():
+    policy = {
+        "sshd_maxretry": _fail2ban_get("sshd", "maxretry"),
+        "sshd_findtime": _fail2ban_get("sshd", "findtime"),
+        "sshd_bantime": _fail2ban_get("sshd", "bantime"),
+        "recidive_bantime": _fail2ban_get("recidive", "bantime"),
+        "override_active": FAIL2BAN_POLICY_OVERRIDE.exists(),
+        "override_path": str(FAIL2BAN_POLICY_OVERRIDE),
+    }
+    return {"status": "ok", "policy": policy}
+
+
+def _bounded_int(name, raw, minimum, maximum):
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def fail2ban_policy_set(maxretry, findtime, bantime, recidive_bantime):
+    maxretry = _bounded_int("sshd_maxretry", maxretry, 1, 50)
+    findtime = _bounded_int("sshd_findtime", findtime, 60, 86400)
+    bantime = _bounded_int("sshd_bantime", bantime, 60, 2592000)
+    recidive_bantime = _bounded_int("recidive_bantime", recidive_bantime, 3600, 7776000)
+
+    _write(FAIL2BAN_POLICY_OVERRIDE, f"""# Managed by Aegis Control Plane
+# Overrides only the high-impact policy knobs exposed in Operations.
+
+[sshd]
+maxretry = {maxretry}
+findtime = {findtime}
+bantime = {bantime}
+
+[recidive]
+bantime = {recidive_bantime}
+""")
+    restart_service(KNOWN_SERVICES["fail2ban"])
+    payload = fail2ban_status()
+    payload["policy"] = fail2ban_policy_status()["policy"]
+    return payload
+
+
+def fail2ban_status():
+    jails = [_fail2ban_jail_status(jail) for jail in ("sshd", "recidive")]
+    return {
+        "status": "ok",
+        "service": unit_state(KNOWN_SERVICES["fail2ban"]),
+        "jails": jails,
+        "currently_banned": sum(j["currently_banned"] for j in jails if j["available"]),
+        "available": any(j["available"] for j in jails),
+        "policy": fail2ban_policy_status()["policy"],
+    }
+
+
+def fail2ban_unban(ip):
+    ipaddress.ip_address(ip)
+    touched = []
+    for jail in ("sshd", "recidive"):
+        jail_status = _fail2ban_jail_status(jail)
+        if not jail_status["available"]:
+            continue
+        result = run(["fail2ban-client", "set", jail, "unbanip", ip], timeout=8)
+        if result.returncode == 0:
+            touched.append(jail)
+    payload = fail2ban_status()
+    payload["unbanned_ip"] = ip
+    payload["touched_jails"] = touched
+    return payload
+
+
+def dkms_health_check():
+    running_kernel = os.uname().release
+    vpn, _ = pick_vpn()
+    module = vpn["module"]
+    module_ok = module_ready(module, running_kernel)
+    headers_ok = headers_installed(running_kernel)
+    lines = dkms_status(module)
+    pass_check = module_ok and (headers_ok if vpn["transport"] == "amneziawg" else True)
+    return {
+        "status": "ok",
+        "message": "DKMS preflight ready" if pass_check else "DKMS preflight needs attention",
+        "pass": pass_check,
+        "transport": vpn["transport"],
+        "module": module,
+        "kernel": running_kernel,
+        "module_ready": module_ok,
+        "headers_installed": headers_ok,
+        "dkms": lines,
+    }
+
+
+def save_iptables_rules():
+    Path("/etc/iptables").mkdir(parents=True, exist_ok=True)
+    if shutil_which("netfilter-persistent"):
+        result = run(["netfilter-persistent", "save"], timeout=15)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "netfilter-persistent save failed")
+        return {"status": "ok", "message": "iptables rules saved via netfilter-persistent"}
+
+    v4 = run(["iptables-save"], timeout=10)
+    if v4.returncode != 0:
+        raise RuntimeError(v4.stderr.strip() or "iptables-save failed")
+    Path("/etc/iptables/rules.v4").write_text(v4.stdout)
+
+    if shutil_which("ip6tables-save"):
+        v6 = run(["ip6tables-save"], timeout=10)
+        if v6.returncode == 0:
+            Path("/etc/iptables/rules.v6").write_text(v6.stdout)
+
+    return {"status": "ok", "message": "iptables rules saved to /etc/iptables"}
+
+
+def status():
+    running_kernel = os.uname().release
+    kernels = installed_kernels()
+    newest_kernel = kernels[-1] if kernels else running_kernel
+    boot_target = newest_kernel or running_kernel
+    vpn, vpn_states = pick_vpn()
+    transport = vpn["transport"]
+    module = vpn["module"]
+    amnezia = transport == "amneziawg"
+
+    module_ok = module_ready(module, boot_target)
+    headers_ok = headers_installed(boot_target)
+    service_enabled = vpn["enabled"] == "enabled"
+    preflight_checks = {
+        "service_enabled": service_enabled,
+        "module_ready": module_ok,
+        "headers_installed": headers_ok,
+    }
+    preflight_pass = service_enabled and module_ok and (headers_ok if amnezia else True)
+
+    unattended_active = unit_state("unattended-upgrades")
+    api_state = unit_state(KNOWN_SERVICES["api"])
+    dns_state = unit_state(KNOWN_SERVICES["dns"])
+
+    return {
+        "status": "ok",
+        "update_reboot": {
+            "reboot_required": Path("/var/run/reboot-required").exists(),
+            "running_kernel": running_kernel,
+            "newest_installed_kernel": newest_kernel,
+            "boot_target_kernel": boot_target,
+            "pending_kernel_mismatch": boot_target != running_kernel,
+            "unattended_upgrades": unattended_active,
+            "next_boot": {
+                "pass": preflight_pass,
+                "transport": transport,
+                "service": vpn["service"],
+                "module": module,
+                "checks": preflight_checks,
+                "dkms": dkms_status(module) if amnezia else [],
+            },
+        },
+        "vpn_guard": {
+            "transport": transport,
+            "label": vpn["label"],
+            "service": vpn["service"],
+            "interface": vpn["interface"],
+            "services": vpn_states,
+            "runtime": vpn_runtime(vpn),
+            "api": api_state,
+            "dns": dns_state,
+        },
+        "network_tuning": network_tuning_status(vpn),
+        "logging_profile": logging_status(),
+        "fail2ban_control": fail2ban_status(),
+    }
+
+
+def restart_service(name):
+    run(["systemctl", "restart", name], check=True, timeout=15)
+
+
+def action(name):
+    if name == "restart-api":
+        run(["systemctl", "restart", "--no-block", KNOWN_SERVICES["api"]], check=True, timeout=8)
+        return {"status": "ok", "restarting": KNOWN_SERVICES["api"]}
+    elif name == "restart-dns":
+        restart_service(KNOWN_SERVICES["dns"])
+    elif name == "restart-vpn":
+        vpn, _ = pick_vpn()
+        restart_service(vpn["service"])
+    elif name == "logging-standard":
+        return set_logging_profile("standard")
+    elif name == "logging-minimal":
+        return set_logging_profile("minimal")
+    elif name == "restart-fail2ban":
+        restart_service(KNOWN_SERVICES["fail2ban"])
+    elif name == "dkms-check":
+        return dkms_health_check()
+    elif name == "save-iptables":
+        return save_iptables_rules()
+    else:
+        raise ValueError(f"unsupported action: {name}")
+    return status()
+
+
+def main():
+    allowed = {
+        "status", "restart-api", "restart-dns", "restart-vpn",
+        "logging-standard", "logging-minimal", "restart-fail2ban",
+        "dkms-check", "save-iptables",
+    }
+    if len(sys.argv) < 2:
+        print("usage: aegis-node-ops status|restart-api|restart-dns|restart-vpn|logging-minimal|logging-standard|fail2ban-unban <ip>|fail2ban-policy-set <maxretry> <findtime> <bantime> <recidive_bantime>|restart-fail2ban|dkms-check|save-iptables", file=sys.stderr)
+        return 2
+
+    try:
+        if sys.argv[1] == "status" and len(sys.argv) == 2:
+            payload = status()
+        elif sys.argv[1] == "fail2ban-unban" and len(sys.argv) == 3:
+            payload = fail2ban_unban(sys.argv[2])
+        elif sys.argv[1] == "fail2ban-policy-set" and len(sys.argv) == 6:
+            payload = fail2ban_policy_set(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+        elif sys.argv[1] in allowed and len(sys.argv) == 2:
+            payload = action(sys.argv[1])
+        else:
+            print("invalid arguments", file=sys.stderr)
+            return 2
+    except Exception as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    print(json.dumps(payload))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
