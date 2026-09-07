@@ -29,19 +29,18 @@
   become: true
   when: dns_enable
 
-- name: Order unbound after active VPN service
-  copy:
-    dest: /etc/systemd/system/unbound.service.d/after-vpn.conf
-    content: |
-      [Unit]
-      After={{ vpn_service_unit }}
-      Wants={{ vpn_service_unit }}
-    owner: root
-    group: root
-    mode: "0644"
+- name: Remove obsolete unbound VPN ordering drop-in
+  file:
+    path: /etc/systemd/system/unbound.service.d/after-vpn.conf
+    state: absent
   become: true
-  when: dns_enable
-  notify: Restart unbound
+  register: obsolete_unbound_vpn_ordering
+
+- name: Reload systemd after removing obsolete unbound ordering
+  systemd:
+    daemon_reload: true
+  become: true
+  when: obsolete_unbound_vpn_ordering.changed
 
 - name: Remove inactive backend DNS redirect (UDP 53)
   iptables:
