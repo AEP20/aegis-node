@@ -1,0 +1,30 @@
+- name: Resolve kernel header tracking package
+  set_fact:
+    amneziawg_resolved_kernel_headers_metapackage: >-
+      {{
+        amneziawg_kernel_headers_metapackage
+        if amneziawg_kernel_headers_metapackage != 'auto'
+        else (
+          'linux-headers-generic'
+          if ansible_facts['distribution'] == 'Ubuntu'
+          and ansible_facts['kernel'] is match(
+            '^' ~ (amneziawg_ubuntu_ga_kernel_series.get(
+              ansible_facts['distribution_version'], 'unsupported'
+            ) | regex_escape) ~ '\.[0-9]+-[0-9]+-generic$'
+          )
+          else ''
+        )
+      }}
+
+- name: Require a matching kernel header tracking package
+  assert:
+    that:
+      - amneziawg_resolved_kernel_headers_metapackage is match('^linux-headers-[a-z0-9][a-z0-9.+-]*$')
+      - amneziawg_resolved_kernel_headers_metapackage is not match('^linux-headers-[0-9]')
+    fail_msg: >-
+      Cannot select a kernel header tracking package for
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+      running {{ ansible_facts['kernel'] }}.
+      Set amneziawg_kernel_headers_metapackage to the matching metapackage
+      for this kernel series (for example linux-headers-generic-hwe-22.04
+      for Ubuntu 22.04 HWE). Do not use a versioned header package.

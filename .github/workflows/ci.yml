@@ -29,6 +29,9 @@ jobs:
           cd ansible
           ansible-lint -x yaml,fqcn,var-naming playbook-*.yml
 
+      - name: Test AmneziaWG kernel maintenance
+        run: python -m unittest discover -s tests -p 'test_amneziawg_kernel.py'
+
   lint-python:
     name: Lint API
     runs-on: ubuntu-latest

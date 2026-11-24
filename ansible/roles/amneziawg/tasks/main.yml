@@ -15,17 +15,34 @@
           )
       }}
 
+- name: Select kernel header tracking package
+  include_tasks: kernel-headers.yml
+
 - name: Install AmneziaWG prerequisites
   apt:
     name:
       - software-properties-common
       - python3-launchpadlib
       - gnupg2
+      - build-essential
+      - dkms
       - "linux-headers-{{ ansible_facts['kernel'] }}"
+      - "{{ amneziawg_resolved_kernel_headers_metapackage }}"
       - iptables
       - iptables-persistent
     state: present
     update_cache: yes
+  become: true
+
+- name: Enable automatic AmneziaWG builds on kernel updates
+  lineinfile:
+    path: /etc/dkms/amneziawg.conf
+    regexp: '^\s*AUTOINSTALL\s*='
+    line: 'AUTOINSTALL="yes"'
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
   become: true
 
 - name: Add AmneziaWG PPA
@@ -49,6 +66,13 @@
   until: amneziawg_package_result is succeeded
   retries: 3
   delay: 10
+
+- name: Prepare AmneziaWG module for the running kernel
+  include_tasks:
+    file: kernel-module.yml
+    apply:
+      become: true
+  when: not ansible_check_mode
 
 - name: Load AmneziaWG kernel module
   modprobe:

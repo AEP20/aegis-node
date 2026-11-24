@@ -1,0 +1,73 @@
+- name: Ensure AmneziaWG module is installed for the running kernel
+  block:
+    - name: Read registered AmneziaWG module versions
+      command:
+        argv: [dkms, status, -m, amneziawg]
+      register: amneziawg_dkms_status
+      changed_when: false
+
+    - name: Resolve the registered AmneziaWG module version
+      set_fact:
+        amneziawg_dkms_versions: >-
+          {{ amneziawg_dkms_status.stdout
+             | regex_findall('(?m)^amneziawg(?:/|,\s*)([^,\s]+)')
+             | unique | list }}
+
+    - name: Require one registered AmneziaWG module version
+      assert:
+        that:
+          - amneziawg_dkms_versions | length == 1
+        fail_msg: >-
+          Expected one registered AmneziaWG source version, found
+          {{ amneziawg_dkms_versions | join(', ') | default('none', true) }}.
+          Resolve missing or multiple DKMS source versions before continuing.
+
+    - name: Check AmneziaWG installation for the running kernel
+      command:
+        argv:
+          - modinfo
+          - -k
+          - "{{ ansible_facts['kernel'] }}"
+          - -F
+          - filename
+          - amneziawg
+      register: amneziawg_module_before
+      changed_when: false
+      failed_when: amneziawg_module_before.rc not in [0, 1]
+
+    - name: Build and install missing AmneziaWG module for the running kernel
+      command:
+        argv:
+          - dkms
+          - install
+          - -m
+          - amneziawg
+          - -v
+          - "{{ amneziawg_dkms_versions | first }}"
+          - -k
+          - "{{ ansible_facts['kernel'] }}"
+      when: amneziawg_module_before.rc != 0
+      changed_when: true
+
+    - name: Verify AmneziaWG module is available for the running kernel
+      command:
+        argv:
+          - modinfo
+          - -k
+          - "{{ ansible_facts['kernel'] }}"
+          - -F
+          - filename
+          - amneziawg
+      changed_when: false
+
+  rescue:
+    - name: Report AmneziaWG kernel module failure
+      fail:
+        msg: >-
+          AmneziaWG is not ready for running kernel {{ ansible_facts['kernel'] }}.
+          Failed task: {{ ansible_failed_task.name }}.
+          {{ ansible_failed_result.msg | default('') }}
+          {{ ansible_failed_result.stderr | default('') }}
+          Check dkms status and the build log under
+          /var/lib/dkms/amneziawg/<version>/build/make.log.
+          The VPN configuration and peer keys have not been regenerated.
