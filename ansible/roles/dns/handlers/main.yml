@@ -1,5 +1,10 @@
 # aegis-node/ansible/roles/dns/handlers/main.yml
 
+- name: Reload systemd for unbound
+  systemd:
+    daemon_reload: true
+  become: true
+
 - name: Restart unbound
   systemd:
     name: unbound
